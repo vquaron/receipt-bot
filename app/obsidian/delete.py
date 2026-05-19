@@ -102,7 +102,16 @@ def _paths_from_markdown(text: str) -> list[str]:
     return [
         path
         for path in flattened
-        if path.startswith(("Attachments/receipts/", "OCR/", "OCR_VERIFIED/", "DEBUG/openai/"))
+        if path.startswith(
+            (
+                "Attachments/receipts/",
+                "Attachments/receipts_preprocessed/",
+                "OCR/",
+                "OCR_VERIFIED/",
+                "DEBUG/openai/",
+                "DEBUG/preprocessing/",
+            )
+        )
     ]
 
 

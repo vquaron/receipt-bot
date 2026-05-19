@@ -8,6 +8,8 @@ from typing import Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from app.preprocessing.base import PreprocessingResult, disabled_result
+
 
 class SessionState(str, Enum):
     PROCESSING_OPENAI = "processing_openai"
@@ -26,6 +28,7 @@ class ReceiptSession:
     created_at: datetime
     parsed_receipt: dict[str, Any] | None = None
     state: SessionState = SessionState.PROCESSING_OPENAI
+    preprocessing_result: PreprocessingResult | None = None
 
     def to_json(self) -> dict[str, Any]:
         data = asdict(self)
@@ -34,19 +37,27 @@ class ReceiptSession:
         data["source_ocr_path"] = str(self.source_ocr_path)
         data["created_at"] = self.created_at.isoformat()
         data["state"] = self.state.value
+        data["preprocessing_result"] = (
+            self.preprocessing_result.to_json() if self.preprocessing_result else disabled_result(self.image_path).to_json()
+        )
         return data
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> "ReceiptSession":
+        image_path = Path(str(data["image_path"]))
         return cls(
             user_id=int(data["user_id"]),
-            image_path=Path(str(data["image_path"])),
+            image_path=image_path,
             clean_ocr_path=Path(str(data["clean_ocr_path"])),
             source_ocr_path=Path(str(data["source_ocr_path"])),
             temporary_base_name=str(data["temporary_base_name"]),
             created_at=datetime.fromisoformat(str(data["created_at"])),
             parsed_receipt=data.get("parsed_receipt"),
             state=SessionState(str(data.get("state", SessionState.PROCESSING_OPENAI))),
+            preprocessing_result=PreprocessingResult.from_json(
+                data.get("preprocessing_result"),
+                fallback_input=image_path,
+            ),
         )
 
 

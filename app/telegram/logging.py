@@ -14,6 +14,7 @@ class SecretRedactionFilter(logging.Filter):
                 settings.telegram_bot_token,
                 settings.openai_api_key,
                 settings.webhook_secret_token,
+                settings.cloudmersive_api_key,
             )
             if value
         ]

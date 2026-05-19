@@ -25,6 +25,7 @@ from app.ocr.google_vision import (
     GoogleVisionNetworkError,
 )
 from app.pipeline.receipt_pipeline import parse_for_review, run_ocr
+from app.preprocessing import preprocess_receipt_image
 from app.review.models import ReceiptSession, SessionState, review_keyboard
 from app.review.receipt_review import (
     ReviewPayloadError,
@@ -194,8 +195,21 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     await update.message.reply_text("Фото получено. Распознаю текст чека...")
+    preprocessing_temp_dir = settings.obsidian_vault / dated_relpath(
+        "Attachments/receipts_preprocessed/_tmp",
+        created_at,
+        "",
+    )
+    preprocessing_result = await asyncio.to_thread(
+        preprocess_receipt_image,
+        image_path,
+        preprocessing_temp_dir,
+        settings,
+    )
+    image_for_ocr = preprocessing_result.used_for_ocr or image_path
+
     try:
-        _raw_ocr, clean_ocr = await asyncio.to_thread(run_ocr, image_path)
+        _raw_ocr, clean_ocr = await asyncio.to_thread(run_ocr, image_for_ocr)
     except GoogleVisionCredentialsError:
         LOGGER.exception("Google Vision ADC credentials are missing.")
         await update.message.reply_text("Не найдены Google ADC credentials.")
@@ -240,6 +254,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         source_ocr_path=source_ocr_path,
         temporary_base_name=temporary_base_name,
         created_at=created_at,
+        preprocessing_result=preprocessing_result,
     )
     _save_session(session, context)
 

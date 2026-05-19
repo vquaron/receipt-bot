@@ -24,6 +24,12 @@ class Settings:
     webhook_listen: str = "0.0.0.0"
     webhook_port: int = 8080
     webhook_secret_token: str = ""
+    receipt_preprocessing_enabled: bool = False
+    receipt_preprocessing_provider: str = "cloudmersive"
+    cloudmersive_api_key: str = ""
+    cloudmersive_base_url: str = "https://api.cloudmersive.com"
+    cloudmersive_timeout_seconds: float = 30.0
+    cloudmersive_save_debug: bool = True
 
 
 def load_settings() -> Settings:
@@ -53,6 +59,14 @@ def load_settings() -> Settings:
         webhook_listen=_get("WEBHOOK_LISTEN", env_file_values) or "0.0.0.0",
         webhook_port=_int("WEBHOOK_PORT", env_file_values, 8080),
         webhook_secret_token=_get("WEBHOOK_SECRET_TOKEN", env_file_values) or "",
+        receipt_preprocessing_enabled=_bool("RECEIPT_PREPROCESSING_ENABLED", env_file_values, False),
+        receipt_preprocessing_provider=(
+            _get("RECEIPT_PREPROCESSING_PROVIDER", env_file_values) or "cloudmersive"
+        ).lower(),
+        cloudmersive_api_key=_get("CLOUDMERSIVE_API_KEY", env_file_values) or "",
+        cloudmersive_base_url=_get("CLOUDMERSIVE_BASE_URL", env_file_values) or "https://api.cloudmersive.com",
+        cloudmersive_timeout_seconds=_float("CLOUDMERSIVE_TIMEOUT_SECONDS", env_file_values, 30.0),
+        cloudmersive_save_debug=_bool("CLOUDMERSIVE_SAVE_DEBUG", env_file_values, True),
     )
 
 
@@ -78,6 +92,28 @@ def _int(name: str, env_file_values: dict[str, str | None], default: int) -> int
         return int(raw_value)
     except ValueError as exc:
         raise RuntimeError(f"{name} must be an integer.") from exc
+
+
+def _float(name: str, env_file_values: dict[str, str | None], default: float) -> float:
+    raw_value = _get(name, env_file_values)
+    if not raw_value:
+        return default
+    try:
+        return float(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number.") from exc
+
+
+def _bool(name: str, env_file_values: dict[str, str | None], default: bool) -> bool:
+    raw_value = _get(name, env_file_values)
+    if raw_value is None or raw_value == "":
+        return default
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be true or false.")
 
 
 def _int_set(name: str, env_file_values: dict[str, str | None]) -> frozenset[int]:

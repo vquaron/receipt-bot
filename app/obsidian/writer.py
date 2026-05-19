@@ -45,20 +45,27 @@ def write_receipt_note(
 
     note_rel = dated_relpath("Receipts", _as_datetime(note_date), f"{stem}.md")
     attachment_rel = dated_relpath("Attachments/receipts", _as_datetime(note_date), f"{stem}.jpg")
+    preprocessed_rel = _preprocessed_rel(session, note_date, stem)
     clean_rel = dated_relpath("OCR", _as_datetime(note_date), f"{stem}.clean.hy.txt")
     source_rel = dated_relpath("OCR_VERIFIED", _as_datetime(note_date), f"{stem}.verified.hy.txt")
     manifest_rel = dated_relpath("MANIFEST/receipts", _as_datetime(note_date), f"{stem}.manifest.json")
 
     note_path = settings.obsidian_vault / note_rel
     attachment_path = settings.obsidian_vault / attachment_rel
+    preprocessed_path = settings.obsidian_vault / preprocessed_rel if preprocessed_rel else None
     clean_path = settings.obsidian_vault / clean_rel
     source_path = settings.obsidian_vault / source_rel
     manifest_path = settings.obsidian_vault / manifest_rel
 
-    for path in (note_path, attachment_path, clean_path, source_path, manifest_path):
+    paths_to_prepare = [note_path, attachment_path, clean_path, source_path, manifest_path]
+    if preprocessed_path:
+        paths_to_prepare.append(preprocessed_path)
+    for path in paths_to_prepare:
         ensure_parent(path)
 
     shutil.move(str(session.image_path), attachment_path)
+    if preprocessed_path and session.preprocessing_result and session.preprocessing_result.output_path:
+        shutil.move(str(session.preprocessing_result.output_path), preprocessed_path)
     shutil.move(str(session.clean_ocr_path), clean_path)
     shutil.move(str(session.source_ocr_path), source_path)
 
@@ -81,20 +88,16 @@ def write_receipt_note(
         ),
         encoding="utf-8",
     )
-    _write_manifest(
-        manifest_path,
-        {
-            "version": 1,
-            "created_at": datetime.now().isoformat(),
-            "note": note_rel.as_posix(),
-            "files": [
-                note_rel.as_posix(),
-                attachment_rel.as_posix(),
-                clean_rel.as_posix(),
-                source_rel.as_posix(),
-            ],
-        },
+    manifest = _build_manifest(
+        settings=settings,
+        session=session,
+        note_rel=note_rel,
+        attachment_rel=attachment_rel,
+        preprocessed_rel=preprocessed_rel,
+        clean_rel=clean_rel,
+        source_rel=source_rel,
     )
+    _write_manifest(manifest_path, manifest)
 
     return ReceiptArtifact(
         file_name=f"{stem}.md",
@@ -117,6 +120,68 @@ def write_openai_debug_file(settings: Settings, session: ReceiptSession, raw_res
     ensure_parent(debug_path)
     debug_path.write_text(raw_response, encoding="utf-8")
     return debug_path
+
+
+def _preprocessed_rel(session: ReceiptSession, note_date: date, stem: str) -> Path | None:
+    result = session.preprocessing_result
+    if not result or not result.ok or not result.output_path:
+        return None
+    suffix = result.output_path.suffix.lower()
+    if suffix not in {".jpg", ".jpeg", ".png"}:
+        suffix = ".jpg"
+    if suffix == ".jpeg":
+        suffix = ".jpg"
+    return dated_relpath(
+        "Attachments/receipts_preprocessed",
+        _as_datetime(note_date),
+        f"{stem}.preprocessed{suffix}",
+    )
+
+
+def _build_manifest(
+    *,
+    settings: Settings,
+    session: ReceiptSession,
+    note_rel: Path,
+    attachment_rel: Path,
+    preprocessed_rel: Path | None,
+    clean_rel: Path,
+    source_rel: Path,
+) -> dict[str, object]:
+    result = session.preprocessing_result
+    ocr_input_rel = attachment_rel
+    if result and result.ok and preprocessed_rel:
+        ocr_input_rel = preprocessed_rel
+
+    files = [
+        note_rel.as_posix(),
+        attachment_rel.as_posix(),
+        clean_rel.as_posix(),
+        source_rel.as_posix(),
+    ]
+    if preprocessed_rel:
+        files.append(preprocessed_rel.as_posix())
+    if result and result.debug_path:
+        try:
+            files.append(result.debug_path.relative_to(settings.obsidian_vault).as_posix())
+        except ValueError:
+            pass
+
+    return {
+        "version": 1,
+        "created_at": datetime.now().isoformat(),
+        "note": note_rel.as_posix(),
+        "original_image": attachment_rel.as_posix(),
+        "preprocessed_image": preprocessed_rel.as_posix() if preprocessed_rel else None,
+        "ocr_input_image": ocr_input_rel.as_posix(),
+        "preprocessing": {
+            "enabled": settings.receipt_preprocessing_enabled,
+            "provider": settings.receipt_preprocessing_provider if settings.receipt_preprocessing_enabled else "disabled",
+            "ok": bool(result.ok) if result else False,
+            "error": result.error if result else None,
+        },
+        "files": files,
+    }
 
 
 def render_markdown(

@@ -87,6 +87,12 @@ DATA_DIR=data
 BOT_MODE=polling
 WEBHOOK_URL=
 WEBHOOK_SECRET_TOKEN=
+RECEIPT_PREPROCESSING_ENABLED=false
+RECEIPT_PREPROCESSING_PROVIDER=cloudmersive
+CLOUDMERSIVE_API_KEY=
+CLOUDMERSIVE_BASE_URL=https://api.cloudmersive.com
+CLOUDMERSIVE_TIMEOUT_SECONDS=30
+CLOUDMERSIVE_SAVE_DEBUG=true
 ```
 
 `OPENAI_MODEL` можно поменять без изменения кода. По умолчанию используется недорогая современная модель `gpt-5.4-mini`.
@@ -96,6 +102,7 @@ WEBHOOK_SECRET_TOKEN=
 ```env
 TELEGRAM_BOT_TOKEN_FILE=/run/secrets/telegram_token
 OPENAI_API_KEY_FILE=/run/secrets/openai_key
+CLOUDMERSIVE_API_KEY_FILE=/run/secrets/cloudmersive_key
 ```
 
 ## 5. Установка зависимостей
@@ -157,13 +164,17 @@ data/corrections.json
 ```text
 Receipts/YYYY/MM/<file_name>.md
 Attachments/receipts/YYYY/MM/<file_name>.jpg
+Attachments/receipts_preprocessed/YYYY/MM/<file_name>.preprocessed.jpg
 OCR/YYYY/MM/<file_name>.clean.hy.txt
 OCR_VERIFIED/YYYY/MM/<file_name>.verified.hy.txt
 DEBUG/openai/YYYY/MM/<temporary_name>.openai.raw.txt
+DEBUG/preprocessing/YYYY/MM/<temporary_name>.cloudmersive.json
 MANIFEST/receipts/YYYY/MM/<file_name>.manifest.json
 ```
 
 `DEBUG/openai/...` появляется только если OpenAI вернул невалидный JSON.
+
+`Attachments/receipts_preprocessed/...` и `DEBUG/preprocessing/...` появляются только при включённом image preprocessing.
 
 `MANIFEST/...` создаётся для безопасного удаления всех файлов конкретного чека.
 
@@ -202,7 +213,32 @@ category: "Grocery"
 
 При исправлении бот сравнивает исходные поля OpenAI и исправленные поля. Если, например, было `WT`, а пользователь заменил на `шт`, правило сохраняется в `data/corrections.json` и будет применяться к следующим чекам.
 
-## 10. Формат результата OpenAI
+## 10. Image preprocessing before OCR
+
+Bot can optionally prepare raw receipt photos before Google Cloud Vision OCR.
+
+When enabled, the bot sends the original Telegram image to Cloudmersive Detect and Unskew Document API. The API tries to detect receipt borders, crop background and fix perspective. If preprocessing succeeds, Google Vision OCR receives the prepared image. If preprocessing fails, the bot automatically falls back to the original image.
+
+Env:
+
+```env
+RECEIPT_PREPROCESSING_ENABLED=false
+RECEIPT_PREPROCESSING_PROVIDER=cloudmersive
+CLOUDMERSIVE_API_KEY=
+CLOUDMERSIVE_BASE_URL=https://api.cloudmersive.com
+CLOUDMERSIVE_TIMEOUT_SECONDS=30
+CLOUDMERSIVE_SAVE_DEBUG=true
+```
+
+Original images are always preserved. Preprocessed images are saved to:
+
+```text
+Attachments/receipts_preprocessed/YYYY/MM/<file_name>.preprocessed.jpg
+```
+
+This layer is best-effort only. If the Cloudmersive key is missing, the request times out, returns an HTTP error, returns a non-image response, or any unexpected exception happens, the bot logs the issue and continues OCR with the original image. API keys are not written to logs, Markdown, manifest, or debug JSON.
+
+## 11. Формат результата OpenAI
 
 OpenAI должен вернуть строгий JSON:
 
@@ -237,7 +273,7 @@ OpenAI должен вернуть строгий JSON:
 
 Если JSON невалиден, заметка не создаётся, а сырой ответ сохраняется в `DEBUG/openai/...`.
 
-## 11. Удаление чека
+## 12. Удаление чека
 
 Чтобы удалить Markdown-заметку вместе с изображением и OCR-файлами, отправьте боту:
 
@@ -253,7 +289,7 @@ OpenAI должен вернуть строгий JSON:
 
 Удаление связанных файлов сначала использует manifest JSON. Если manifest отсутствует, бот использует fallback по wikilinks из разделов `Оригинал` и `Контроль OCR`. В обоих случаях бот удаляет только файлы внутри `OBSIDIAN_VAULT`.
 
-## 12. Production и Docker
+## 13. Production и Docker
 
 Локальный MVP и production polling запускаются одинаково:
 
@@ -285,15 +321,15 @@ WEBHOOK_PORT=8080
 
 В webhook mode используется проверка Telegram secret token через заголовок `X-Telegram-Bot-Api-Secret-Token`. Caddyfile в `deploy/docker/Caddyfile` нужен только для webhook-сценария.
 
-## 13. Тесты
+## 14. Тесты
 
 ```bash
 python -m pytest -q
 ```
 
-Тесты покрывают path safety, JSON parsing, Markdown rendering, access control, scoped correction rules и manifest deletion.
+Тесты покрывают path safety, JSON parsing, Markdown rendering, access control, scoped correction rules, image preprocessing и manifest deletion.
 
-## 14. Ограничения MVP
+## 15. Ограничения MVP
 
 - без базы данных;
 - без веб-интерфейса;
