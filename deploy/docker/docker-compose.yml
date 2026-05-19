@@ -1,0 +1,11 @@
+services:
+  receipt-bot:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    env_file:
+      - ../../.env
+    volumes:
+      - ../../data:/app/data
+      - ${OBSIDIAN_VAULT}:${OBSIDIAN_VAULT}
+    restart: unless-stopped

@@ -1,0 +1,7 @@
+# Optional webhook mode only.
+# Set BOT_MODE=webhook, WEBHOOK_URL=https://your-domain.example/telegram-webhook,
+# WEBHOOK_SECRET_TOKEN=<random secret>.
+
+your-domain.example {
+	reverse_proxy receipt-bot:8080
+}

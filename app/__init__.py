@@ -1,0 +1,1 @@
+"""Receipt bot application package."""
