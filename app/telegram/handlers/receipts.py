@@ -48,8 +48,26 @@ async def receipt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("Чек не найден среди ваших чеков.")
         return
     vault = settings(context).obsidian_vault
-    note_path = safe_vault_path(vault, record.note_rel)
-    image_path = _first_existing_file(vault, record.files, prefixes=("Users/",), suffixes=(".jpg", ".jpeg", ".png"))
+    try:
+        note_path = safe_vault_path(vault, record.note_rel)
+        image_path = _first_existing_file(
+            vault,
+            record.files,
+            prefixes=("Users/",),
+            suffixes=(".jpg", ".jpeg", ".png"),
+        )
+    except ValueError:
+        LOGGER.warning(
+            "Invalid receipt manifest paths for user_id=%s receipt_id=%s query=%r",
+            update.effective_user.id,
+            record.receipt_id,
+            query,
+            exc_info=True,
+        )
+        await update.message.reply_text(
+            "Чек содержит некорректные пути к файлам и не может быть открыт."
+        )
+        return
     summary = "\n".join(
         [
             f"receipt_id: {record.receipt_id}",
