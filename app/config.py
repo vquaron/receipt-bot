@@ -18,7 +18,13 @@ class Settings:
     data_dir: Path
     admin_telegram_user_ids: frozenset[int]
     allowed_telegram_user_ids: frozenset[int]
+    privileged_telegram_user_ids: frozenset[int] = frozenset()
     openai_model: str = "gpt-5.4-mini"
+    user_vault_root: str = "Users"
+    regular_daily_receipt_limit: int = 10
+    regular_monthly_receipt_limit: int = 100
+    privileged_daily_receipt_limit: int = 0
+    privileged_monthly_receipt_limit: int = 0
     bot_mode: str = "polling"
     webhook_url: str = ""
     webhook_listen: str = "0.0.0.0"
@@ -47,7 +53,13 @@ def load_settings() -> Settings:
         data_dir=data_dir,
         admin_telegram_user_ids=_int_set("ADMIN_TELEGRAM_USER_IDS", env_file_values),
         allowed_telegram_user_ids=_int_set("ALLOWED_TELEGRAM_USER_IDS", env_file_values),
+        privileged_telegram_user_ids=_int_set("PRIVILEGED_TELEGRAM_USER_IDS", env_file_values),
         openai_model=_get("OPENAI_MODEL", env_file_values) or "gpt-5.4-mini",
+        user_vault_root=_get("USER_VAULT_ROOT", env_file_values) or "Users",
+        regular_daily_receipt_limit=_int("REGULAR_DAILY_RECEIPT_LIMIT", env_file_values, 10),
+        regular_monthly_receipt_limit=_int("REGULAR_MONTHLY_RECEIPT_LIMIT", env_file_values, 100),
+        privileged_daily_receipt_limit=_int("PRIVILEGED_DAILY_RECEIPT_LIMIT", env_file_values, 0),
+        privileged_monthly_receipt_limit=_int("PRIVILEGED_MONTHLY_RECEIPT_LIMIT", env_file_values, 0),
         bot_mode=bot_mode,
         webhook_url=_get("WEBHOOK_URL", env_file_values) or "",
         webhook_listen=_get("WEBHOOK_LISTEN", env_file_values) or "0.0.0.0",
