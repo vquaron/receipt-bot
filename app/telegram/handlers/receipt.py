@@ -1,0 +1,282 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+from datetime import datetime
+from uuid import uuid4
+
+from telegram import Update
+from telegram.ext import ContextTypes
+
+from app.llm.openai_parser import OpenAIInvalidJSONError, OpenAIQuotaError
+from app.obsidian.writer import write_openai_debug_file, write_receipt_note
+from app.ocr.google_vision import (
+    GoogleVisionCredentialsError,
+    GoogleVisionError,
+    GoogleVisionNetworkError,
+)
+from app.pipeline.receipt_pipeline import parse_for_review, run_ocr
+from app.review.models import ReceiptSession, SessionState, review_keyboard
+from app.review.receipt_review import (
+    ReviewPayloadError,
+    merge_review_payload,
+    parse_review_payload,
+    render_review_text,
+    review_payload_json,
+)
+from app.telegram.handlers.access import ensure_access, handle_access_callback
+from app.telegram.handlers.common import (
+    SESSIONS,
+    access,
+    corrections,
+    delete_session,
+    quotas,
+    save_session,
+    send_text_chunks,
+    settings,
+)
+from app.users.paths import user_dated_relpath
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user is None or update.message is None or not update.message.photo:
+        return
+    if not await ensure_access(update, context):
+        return
+
+    user_id = update.effective_user.id
+    role = access(context).role_for(user_id)
+    quota = quotas(context).check(user_id, role)
+    if not quota.allowed:
+        await update.message.reply_text(_quota_message(quota.reason, quota.daily_used, quota.daily_limit, quota.monthly_used, quota.monthly_limit))
+        return
+    quotas(context).record(user_id)
+
+    app_settings = settings(context)
+    created_at = datetime.now()
+    temporary_base_name = f"{created_at:%Y%m%d_%H%M%S}_{uuid4().hex[:8]}"
+    image_path = app_settings.obsidian_vault / user_dated_relpath(
+        app_settings,
+        user_id,
+        "Attachments/receipts/_tmp",
+        created_at,
+        f"{temporary_base_name}.jpg",
+    )
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        telegram_file = await update.message.photo[-1].get_file()
+        await telegram_file.download_to_drive(custom_path=image_path)
+    except OSError:
+        LOGGER.exception("Failed to save Telegram photo for user_id=%s", user_id)
+        await update.message.reply_text("Не удалось сохранить изображение чека.")
+        return
+
+    await update.message.reply_text("Фото получено. Распознаю текст чека...")
+    try:
+        _raw_ocr, clean_ocr = await asyncio.to_thread(run_ocr, image_path)
+    except GoogleVisionCredentialsError:
+        LOGGER.exception("Google Vision ADC credentials are missing.")
+        await update.message.reply_text("Не найдены Google ADC credentials.")
+        return
+    except GoogleVisionNetworkError:
+        LOGGER.exception("Google Vision network error.")
+        await update.message.reply_text("Не удалось подключиться к Google Vision API.")
+        return
+    except GoogleVisionError:
+        LOGGER.exception("Google Vision returned an error.")
+        await update.message.reply_text("Google Vision не смог обработать изображение.")
+        return
+    except Exception:
+        LOGGER.exception("Unexpected OCR failure.")
+        await update.message.reply_text("Не удалось выполнить OCR.")
+        return
+
+    if not clean_ocr:
+        await update.message.reply_text("Не удалось распознать текст на чеке. OpenAI не вызывался.")
+        return
+
+    clean_ocr_path = app_settings.obsidian_vault / user_dated_relpath(
+        app_settings,
+        user_id,
+        "OCR",
+        created_at,
+        f"{temporary_base_name}.clean.hy.txt",
+    )
+    source_ocr_path = app_settings.obsidian_vault / user_dated_relpath(
+        app_settings,
+        user_id,
+        "OCR_VERIFIED",
+        created_at,
+        f"{temporary_base_name}.verified.hy.txt",
+    )
+    try:
+        clean_ocr_path.parent.mkdir(parents=True, exist_ok=True)
+        source_ocr_path.parent.mkdir(parents=True, exist_ok=True)
+        clean_ocr_path.write_text(clean_ocr, encoding="utf-8")
+        source_ocr_path.write_text(clean_ocr, encoding="utf-8")
+    except OSError:
+        LOGGER.exception("Failed to write OCR files for user_id=%s", user_id)
+        await update.message.reply_text("Не удалось сохранить OCR для обработки.")
+        return
+
+    session = ReceiptSession(
+        user_id=user_id,
+        image_path=image_path,
+        clean_ocr_path=clean_ocr_path,
+        source_ocr_path=source_ocr_path,
+        temporary_base_name=temporary_base_name,
+        created_at=created_at,
+    )
+    save_session(session, context)
+
+    await update.message.reply_photo(photo=image_path)
+    await update.message.reply_text("OCR готов. Извлекаю поля заметки через OpenAI...")
+    await process_openai_for_review(session, update.message, context)
+
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None or update.effective_user is None:
+        return
+    await query.answer()
+    if query.data and query.data.startswith("access_"):
+        await handle_access_callback(update, context)
+        return
+    session = SESSIONS.get(update.effective_user.id)
+    if session is None:
+        await query.message.reply_text("Нет активной обработки чека.")
+        return
+    if query.data == "review_cancel":
+        delete_session(session.user_id, context)
+        await query.message.reply_text("Обработка отменена")
+        return
+    if session.state != SessionState.WAITING_FOR_RUSSIAN_REVIEW:
+        await query.message.reply_text("Этот шаг уже завершён.")
+        return
+    if query.data == "review_edit":
+        if session.parsed_receipt is None:
+            await query.message.reply_text("Нет полей заметки для исправления.")
+            return
+        session.state = SessionState.WAITING_FOR_CORRECTED_REVIEW
+        save_session(session, context)
+        await query.message.reply_text("Отправьте исправленный JSON. Меняйте только значения.")
+        await send_text_chunks(query.message, review_payload_json(session.parsed_receipt))
+        return
+    if query.data == "review_confirm":
+        await create_note_from_review(session, query.message, context)
+
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user is None or update.message is None:
+        return
+    if not await ensure_access(update, context):
+        return
+    session = SESSIONS.get(update.effective_user.id)
+    if session is None:
+        await update.message.reply_text("Сначала отправьте фото чека.")
+        return
+    if session.state == SessionState.WAITING_FOR_CORRECTED_REVIEW:
+        if session.parsed_receipt is None:
+            await update.message.reply_text("Нет активных полей заметки для исправления.")
+            return
+        try:
+            payload = parse_review_payload(update.message.text)
+        except ReviewPayloadError as exc:
+            await update.message.reply_text(f"Не удалось принять исправления: {exc}")
+            return
+        corrected = merge_review_payload(session.parsed_receipt, payload)
+        learned_count = corrections(context).learn(session.parsed_receipt, corrected)
+        session.parsed_receipt = corrected
+        save_session(session, context)
+        await update.message.reply_text(f"Исправления приняты. Новых правил замен: {learned_count}.")
+        await create_note_from_review(session, update.message, context)
+        return
+    if session.state == SessionState.WAITING_FOR_RUSSIAN_REVIEW:
+        await update.message.reply_text("Используйте кнопки под полями заметки.")
+        return
+    await update.message.reply_text("Отправьте новое фото чека.")
+
+
+async def handle_non_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None:
+        return
+    if update.effective_user is None or not await ensure_access(update, context):
+        return
+    if update.message.text:
+        return
+    await update.message.reply_text("Пожалуйста, отправьте фото чека.")
+
+
+async def process_openai_for_review(session: ReceiptSession, reply_target, context: ContextTypes.DEFAULT_TYPE) -> None:
+    app_settings = settings(context)
+    try:
+        parsed = await asyncio.to_thread(
+            parse_for_review,
+            session.source_ocr_path.read_text(encoding="utf-8"),
+            settings=app_settings,
+            correction_store=corrections(context),
+        )
+    except OpenAIInvalidJSONError as exc:
+        LOGGER.exception("OpenAI returned invalid JSON.")
+        await asyncio.to_thread(write_openai_debug_file, app_settings, session, exc.raw_response)
+        session.state = SessionState.DONE
+        save_session(session, context)
+        await reply_target.reply_text("OpenAI вернул невалидный JSON. Markdown-заметка не создана.")
+        return
+    except OpenAIQuotaError:
+        LOGGER.exception("OpenAI quota is exhausted.")
+        session.state = SessionState.DONE
+        save_session(session, context)
+        await reply_target.reply_text("OpenAI не обработал чек: закончилась квота или не настроен billing.")
+        return
+    except Exception:
+        LOGGER.exception("OpenAI request failed.")
+        session.state = SessionState.DONE
+        save_session(session, context)
+        await reply_target.reply_text("Не удалось обработать OCR через OpenAI.")
+        return
+    session.parsed_receipt = parsed.data
+    session.state = SessionState.WAITING_FOR_RUSSIAN_REVIEW
+    save_session(session, context)
+    await send_text_chunks(reply_target, render_review_text(parsed.data), reply_markup=review_keyboard())
+
+
+async def create_note_from_review(session: ReceiptSession, reply_target, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if session.parsed_receipt is None:
+        await reply_target.reply_text("Нет проверенных полей заметки.")
+        return
+    try:
+        artifact = await asyncio.to_thread(write_receipt_note, settings(context), session, session.parsed_receipt)
+    except Exception:
+        LOGGER.exception("Unexpected note generation failure.")
+        session.state = SessionState.DONE
+        save_session(session, context)
+        await reply_target.reply_text("Не удалось создать Markdown-заметку.")
+        return
+    session.state = SessionState.DONE
+    delete_session(session.user_id, context)
+    await reply_target.reply_text(
+        "\n".join(
+            [
+                f"Готово: создана заметка {artifact.file_name}",
+                f"receipt_id: {artifact.receipt_id}",
+                f"merchant: {artifact.merchant}",
+                f"date: {artifact.date}",
+                f"amount: {artifact.amount}",
+                f"currency: {artifact.currency}",
+            ]
+        )
+    )
+
+
+def _quota_message(reason: str, daily_used: int, daily_limit: int, monthly_used: int, monthly_limit: int) -> str:
+    if reason == "daily_limit":
+        return f"Дневной лимит обработки чеков исчерпан: {daily_used}/{daily_limit}."
+    if reason == "monthly_limit":
+        return f"Месячный лимит обработки чеков исчерпан: {monthly_used}/{monthly_limit}."
+    return "Лимит обработки чеков исчерпан."
+

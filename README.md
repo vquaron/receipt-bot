@@ -83,7 +83,13 @@ OBSIDIAN_VAULT=
 OPENAI_MODEL=gpt-5.4-mini
 ADMIN_TELEGRAM_USER_IDS=123456789
 ALLOWED_TELEGRAM_USER_IDS=123456789,987654321
+PRIVILEGED_TELEGRAM_USER_IDS=
 DATA_DIR=data
+USER_VAULT_ROOT=Users
+REGULAR_DAILY_RECEIPT_LIMIT=10
+REGULAR_MONTHLY_RECEIPT_LIMIT=100
+PRIVILEGED_DAILY_RECEIPT_LIMIT=0
+PRIVILEGED_MONTHLY_RECEIPT_LIMIT=0
 BOT_MODE=polling
 WEBHOOK_URL=
 WEBHOOK_SECRET_TOKEN=
@@ -131,14 +137,17 @@ python bot.py
 ```env
 ADMIN_TELEGRAM_USER_IDS=123456789
 ALLOWED_TELEGRAM_USER_IDS=123456789,987654321
+PRIVILEGED_TELEGRAM_USER_IDS=
 ```
 
 Админы всегда считаются разрешёнными пользователями. Runtime-состояние хранится в:
 
 ```text
-data/access.json
+data/users/users.json
+data/users/access_requests.json
 data/sessions/
 data/corrections.json
+data/usage/YYYY-MM/<user_id>.json
 ```
 
 Если пользователь не в allowlist, бот не скачивает фото, не вызывает Google Vision, не вызывает OpenAI и не создаёт файлы. Вместо этого создаётся pending-заявка, а всем администраторам приходит сообщение с кнопками `Approve` / `Reject`.
@@ -150,22 +159,47 @@ data/corrections.json
 - `/users` — список allowed users, только для админа;
 - `/revoke <user_id>` — отозвать доступ, только для админа.
 
+Роли:
+
+- `admin` — всегда имеет доступ и не ограничен лимитами;
+- `privileged` — привилегированная группа, по умолчанию без лимитов;
+- `regular` — обычный пользователь с дневным и месячным лимитом обработок.
+
+Лимиты задаются в `.env`:
+
+```env
+REGULAR_DAILY_RECEIPT_LIMIT=10
+REGULAR_MONTHLY_RECEIPT_LIMIT=100
+PRIVILEGED_DAILY_RECEIPT_LIMIT=0
+PRIVILEGED_MONTHLY_RECEIPT_LIMIT=0
+```
+
+`0` означает `unlimited`. Проверка лимита происходит до скачивания фото, поэтому пользователь с исчерпанным лимитом не запускает OCR/OpenAI и не создаёт файлы.
+
 ## 8. Структура Obsidian vault
 
 После успешной обработки бот создаёт:
 
 ```text
-Receipts/YYYY/MM/<file_name>.md
-Attachments/receipts/YYYY/MM/<file_name>.jpg
-OCR/YYYY/MM/<file_name>.clean.hy.txt
-OCR_VERIFIED/YYYY/MM/<file_name>.verified.hy.txt
-DEBUG/openai/YYYY/MM/<temporary_name>.openai.raw.txt
-MANIFEST/receipts/YYYY/MM/<file_name>.manifest.json
+Users/<telegram_user_id>/Receipts/YYYY/MM/<file_name>.md
+Users/<telegram_user_id>/Attachments/receipts/YYYY/MM/<file_name>.jpg
+Users/<telegram_user_id>/OCR/YYYY/MM/<file_name>.clean.hy.txt
+Users/<telegram_user_id>/OCR_VERIFIED/YYYY/MM/<file_name>.verified.hy.txt
+Users/<telegram_user_id>/DEBUG/openai/YYYY/MM/<temporary_name>.openai.raw.txt
+Users/<telegram_user_id>/MANIFEST/receipts/YYYY/MM/<file_name>.manifest.json
 ```
 
 `DEBUG/openai/...` появляется только если OpenAI вернул невалидный JSON.
 
 `MANIFEST/...` создаётся для безопасного удаления всех файлов конкретного чека.
+
+Каждый пользователь пишет в отдельное пространство внутри vault:
+
+```text
+Users/<telegram_user_id>/
+```
+
+Обычный пользователь может читать, экспортировать и удалять только свои чеки. Администратор может управлять доступом и отзывать пользователей.
 
 `data/corrections.json` появляется после ручных исправлений и хранит scoped-правила замен вроде `WT -> шт`.
 
@@ -242,7 +276,7 @@ OpenAI должен вернуть строгий JSON:
 Чтобы удалить Markdown-заметку вместе с изображением и OCR-файлами, отправьте боту:
 
 ```text
-/delete_receipt Receipts/YYYY/MM/file.md
+/delete_receipt <receipt_id или file.md>
 ```
 
 Если имя файла уникально, можно указать только его:
@@ -252,6 +286,15 @@ OpenAI должен вернуть строгий JSON:
 ```
 
 Удаление связанных файлов сначала использует manifest JSON. Если manifest отсутствует, бот использует fallback по wikilinks из разделов `Оригинал` и `Контроль OCR`. В обоих случаях бот удаляет только файлы внутри `OBSIDIAN_VAULT`.
+
+Для пользователя дополнительно проверяется scope: manifest не может удалить файлы за пределами `Users/<telegram_user_id>/...`.
+
+Команды для получения своих чеков:
+
+- `/my_receipts` — показать последние сохранённые чеки;
+- `/receipt <receipt_id>` — получить краткую карточку, изображение и Markdown-файл чека;
+- `/export_receipts` — получить ZIP-архив своей папки чеков.
+- `/grant_receipt <user_id> <receipt_id>` — только для админа, скопировать существующий чек в отдельную папку пользователя.
 
 ## 12. Production и Docker
 
@@ -291,7 +334,7 @@ WEBHOOK_PORT=8080
 python -m pytest -q
 ```
 
-Тесты покрывают path safety, JSON parsing, Markdown rendering, access control, scoped correction rules и manifest deletion.
+Тесты покрывают path safety, JSON parsing, Markdown rendering, access control, scoped correction rules, manifest deletion, user isolation, per-user receipt index/export и user quotas.
 
 ## 14. Ограничения MVP
 
@@ -299,5 +342,6 @@ python -m pytest -q
 - без веб-интерфейса;
 - без очереди задач и фоновых воркеров;
 - незавершённые review-сессии хранятся в файлах `data/sessions`;
+- пользователи, роли, заявки и usage-лимиты хранятся в JSON-файлах в `data`;
 - используется один прямой поток обработки на пользователя;
 - правила исправлений простые и основаны на точных заменах значений.

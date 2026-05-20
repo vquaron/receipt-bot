@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from app.config import Settings
@@ -44,3 +45,24 @@ def test_approve_and_revoke(tmp_path: Path) -> None:
     assert access.is_allowed(333)
     assert access.revoke(333)
     assert not access.is_allowed(333)
+
+
+def test_legacy_migration_skips_invalid_user_ids(tmp_path: Path) -> None:
+    app_settings = settings(tmp_path)
+    app_settings.data_dir.mkdir(parents=True, exist_ok=True)
+    (app_settings.data_dir / "access.json").write_text(
+        json.dumps(
+            {
+                "allowed": {"not-a-number": {}, "333": {}},
+                "pending": {"bad": {}, "444": {}},
+                "rejected": {"oops": {}, "555": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    access = AccessControl(app_settings)
+
+    assert access.is_allowed(333)
+    assert access.is_pending(444)
+    assert access.repository.rejected_request(555) is not None

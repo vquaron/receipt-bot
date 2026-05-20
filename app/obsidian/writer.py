@@ -13,11 +13,13 @@ from app.storage.normalization import (
     normalize_receipt_properties,
     slugify_merchant,
 )
-from app.storage.paths import dated_relpath, ensure_parent, next_available_stem, yaml_string
+from app.storage.paths import ensure_parent, next_available_stem, yaml_string
+from app.users.paths import user_dated_relpath
 
 
 @dataclass(frozen=True, slots=True)
 class ReceiptArtifact:
+    receipt_id: str
     file_name: str
     note_path: Path
     manifest_path: Path
@@ -40,14 +42,14 @@ def write_receipt_note(
     merchant_slug = slugify_merchant(merchant)
 
     base_stem = f"{note_date.isoformat()}_{merchant_slug}_{amount_for_name}AMD"
-    receipt_dir = settings.obsidian_vault / dated_relpath("Receipts", _as_datetime(note_date), "")
+    receipt_dir = settings.obsidian_vault / user_dated_relpath(settings, session.user_id, "Receipts", _as_datetime(note_date), "")
     stem = next_available_stem(receipt_dir, base_stem, ".md")
 
-    note_rel = dated_relpath("Receipts", _as_datetime(note_date), f"{stem}.md")
-    attachment_rel = dated_relpath("Attachments/receipts", _as_datetime(note_date), f"{stem}.jpg")
-    clean_rel = dated_relpath("OCR", _as_datetime(note_date), f"{stem}.clean.hy.txt")
-    source_rel = dated_relpath("OCR_VERIFIED", _as_datetime(note_date), f"{stem}.verified.hy.txt")
-    manifest_rel = dated_relpath("MANIFEST/receipts", _as_datetime(note_date), f"{stem}.manifest.json")
+    note_rel = user_dated_relpath(settings, session.user_id, "Receipts", _as_datetime(note_date), f"{stem}.md")
+    attachment_rel = user_dated_relpath(settings, session.user_id, "Attachments/receipts", _as_datetime(note_date), f"{stem}.jpg")
+    clean_rel = user_dated_relpath(settings, session.user_id, "OCR", _as_datetime(note_date), f"{stem}.clean.hy.txt")
+    source_rel = user_dated_relpath(settings, session.user_id, "OCR_VERIFIED", _as_datetime(note_date), f"{stem}.verified.hy.txt")
+    manifest_rel = user_dated_relpath(settings, session.user_id, "MANIFEST/receipts", _as_datetime(note_date), f"{stem}.manifest.json")
 
     note_path = settings.obsidian_vault / note_rel
     attachment_path = settings.obsidian_vault / attachment_rel
@@ -85,7 +87,13 @@ def write_receipt_note(
         manifest_path,
         {
             "version": 1,
+            "receipt_id": stem,
+            "owner_user_id": session.user_id,
             "created_at": datetime.now().isoformat(),
+            "date": note_date.isoformat(),
+            "merchant": merchant,
+            "amount": amount,
+            "currency": "AMD",
             "note": note_rel.as_posix(),
             "files": [
                 note_rel.as_posix(),
@@ -97,6 +105,7 @@ def write_receipt_note(
     )
 
     return ReceiptArtifact(
+        receipt_id=stem,
         file_name=f"{stem}.md",
         note_path=note_path,
         manifest_path=manifest_path,
@@ -108,7 +117,9 @@ def write_receipt_note(
 
 
 def write_openai_debug_file(settings: Settings, session: ReceiptSession, raw_response: str) -> Path:
-    debug_rel = dated_relpath(
+    debug_rel = user_dated_relpath(
+        settings,
+        session.user_id,
         "DEBUG/openai",
         session.created_at,
         f"{session.temporary_base_name}.openai.raw.txt",
