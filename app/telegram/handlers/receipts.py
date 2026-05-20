@@ -10,6 +10,7 @@ from app.receipts.repository import ReceiptCopyError, ReceiptNotFoundError
 from app.storage.paths import safe_vault_path
 from app.telegram.handlers.access import ensure_access
 from app.telegram.handlers.common import access, receipts, send_text_chunks, settings
+from app.users.paths import user_root_rel
 
 
 LOGGER = logging.getLogger(__name__)
@@ -49,11 +50,23 @@ async def receipt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     vault = settings(context).obsidian_vault
     try:
+        user_prefix = f"{user_root_rel(settings(context), update.effective_user.id).as_posix()}/"
+    except ValueError:
+        LOGGER.error(
+            "Invalid USER_VAULT_ROOT configuration while opening receipt for user_id=%s receipt_id=%s query=%r",
+            update.effective_user.id,
+            record.receipt_id,
+            query,
+            exc_info=True,
+        )
+        await update.message.reply_text("Неверная конфигурация хранилища чеков.")
+        return
+    try:
         note_path = safe_vault_path(vault, record.note_rel)
         image_path = _first_existing_file(
             vault,
             record.files,
-            prefixes=("Users/",),
+            prefixes=(user_prefix,),
             suffixes=(".jpg", ".jpeg", ".png"),
         )
     except ValueError:
