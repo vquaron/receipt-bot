@@ -110,6 +110,12 @@ def test_classifier_defaults_to_receipt_for_weak_text() -> None:
     assert classification.reason == "fallback"
 
 
+def test_classifier_does_not_treat_substrings_as_markers() -> None:
+    classification = classify_document_type("Kitchen border color: blue")
+    assert classification.document_type == DOCUMENT_TYPE_RECEIPT
+    assert classification.order_score == 0
+
+
 def _settings(tmp_path: Path) -> Settings:
     return Settings(
         telegram_bot_token="token",

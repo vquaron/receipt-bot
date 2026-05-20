@@ -112,7 +112,12 @@ def _compact(text: str) -> str:
 
 
 def _marker_score(text: str, markers: tuple[str, ...]) -> int:
-    return sum(1 for marker in markers if marker in text)
+    score = 0
+    for marker in markers:
+        pattern = rf"(?<!\w){re.escape(marker)}(?!\w)"
+        if re.search(pattern, text):
+            score += 1
+    return score
 
 
 def _has_app_quantity_pattern(text: str) -> bool:

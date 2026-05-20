@@ -23,9 +23,9 @@ async def my_receipts_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     records = receipts(context).list_user_receipts(update.effective_user.id)
     if not records:
-        await update.message.reply_text("У вас пока нет сохранённых чеков.")
+        await update.message.reply_text("У вас пока нет сохранённых документов.")
         return
-    lines = ["Ваши последние чеки:"]
+    lines = ["Ваши последние документы:"]
     for record in records[:20]:
         kind = document_type_label(record.document_type)
         lines.append(
