@@ -99,7 +99,10 @@ class UserRepository:
         now = datetime.now()
         users: dict[str, dict[str, object]] = {}
         for raw_user_id, payload in _legacy_bucket(legacy, "allowed").items():
-            user_id = int(raw_user_id)
+            try:
+                user_id = int(raw_user_id)
+            except ValueError:
+                continue
             users[str(user_id)] = {
                 "user_id": user_id,
                 "full_name": _payload_text(payload, "full_name"),
@@ -117,7 +120,10 @@ class UserRepository:
         requests = {"pending": {}, "rejected": {}}
         for bucket in ("pending", "rejected"):
             for raw_user_id, payload in _legacy_bucket(legacy, bucket).items():
-                user_id = int(raw_user_id)
+                try:
+                    user_id = int(raw_user_id)
+                except ValueError:
+                    continue
                 requests[bucket][str(user_id)] = {
                     "user_id": user_id,
                     "full_name": _payload_text(payload, "full_name"),
@@ -162,4 +168,3 @@ def _payload_text(payload: object, key: str) -> str:
     if isinstance(payload, dict):
         return str(payload.get(key, ""))
     return ""
-
