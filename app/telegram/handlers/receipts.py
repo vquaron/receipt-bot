@@ -124,7 +124,10 @@ def _first_existing_file(vault, rel_paths, *, prefixes: tuple[str, ...], suffixe
         rel_text = rel_path.as_posix()
         if not rel_text.startswith(prefixes) or not rel_text.lower().endswith(suffixes):
             continue
-        path = safe_vault_path(vault, rel_path)
+        try:
+            path = safe_vault_path(vault, rel_path)
+        except ValueError:
+            continue
         if path.exists() and path.is_file():
             return path
     return None
