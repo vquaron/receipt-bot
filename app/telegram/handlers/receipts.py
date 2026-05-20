@@ -6,6 +6,7 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from app.receipts.document_types import document_type_label
 from app.receipts.repository import ReceiptCopyError, ReceiptNotFoundError
 from app.storage.paths import safe_vault_path
 from app.telegram.handlers.access import ensure_access
@@ -26,8 +27,9 @@ async def my_receipts_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     lines = ["Ваши последние чеки:"]
     for record in records[:20]:
+        kind = document_type_label(record.document_type)
         lines.append(
-            f"- {record.receipt_id}: {record.date or 'no date'} | {record.merchant or 'unknown'} | {record.amount or 'unknown'} {record.currency}"
+            f"- {record.receipt_id}: {kind} | {record.date or 'no date'} | {record.merchant or 'unknown'} | {record.amount or 'unknown'} {record.currency}"
         )
     if len(records) > 20:
         lines.append(f"...ещё {len(records) - 20}. Используйте /export_receipts для архива.")
@@ -71,6 +73,7 @@ async def receipt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     summary = "\n".join(
         [
             f"receipt_id: {record.receipt_id}",
+            f"type: {document_type_label(record.document_type)}",
             f"date: {record.date or 'не указана'}",
             f"merchant: {record.merchant or 'не указан'}",
             f"amount: {record.amount or 'не указана'} {record.currency}",
@@ -129,6 +132,7 @@ async def grant_receipt_command(update: Update, context: ContextTypes.DEFAULT_TY
             [
                 f"Чек скопирован пользователю {target_user_id}.",
                 f"receipt_id: {record.receipt_id}",
+                f"type: {document_type_label(record.document_type)}",
                 f"date: {record.date or 'не указана'}",
                 f"merchant: {record.merchant or 'не указан'}",
                 f"amount: {record.amount or 'не указана'} {record.currency}",

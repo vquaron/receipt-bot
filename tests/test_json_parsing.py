@@ -2,7 +2,8 @@ import json
 
 import pytest
 
-from app.llm.openai_parser import looks_like_receipt
+from app.llm.openai_parser import looks_like_receipt, prompt_for_document_type
+from app.receipts.document_types import DOCUMENT_TYPE_ORDER
 from app.review.receipt_review import ReviewPayloadError, parse_review_payload
 
 
@@ -64,3 +65,10 @@ def test_review_payload_accepts_code_fence() -> None:
     assert parsed["merchant"] == "Zovq Supermarket"
     assert parsed["amount"] == "4465.75"
     assert parsed["category"] == "Grocery"
+
+
+def test_order_prompt_ignores_ingredients_and_keeps_product_rows() -> None:
+    prompt = prompt_for_document_type(DOCUMENT_TYPE_ORDER)
+    assert "ingredients" in prompt.lower()
+    assert "skip" in prompt.lower()
+    assert "product name, quantity, unit price, and line total" in prompt

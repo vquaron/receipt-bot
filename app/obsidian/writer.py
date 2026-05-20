@@ -7,6 +7,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from app.config import Settings
+from app.receipts.document_types import document_title_ru, normalize_document_type
 from app.review.models import ReceiptSession
 from app.storage.normalization import (
     amount_for_filename,
@@ -35,6 +36,7 @@ def write_receipt_note(
     parsed: dict[str, object],
 ) -> ReceiptArtifact:
     normalized = normalize_receipt_properties(parsed)
+    document_type = normalize_document_type(session.document_type)
     note_date, used_fallback_date = _resolve_note_date(str(normalized.get("date", "")))
     merchant = str(normalized.get("merchant", "")) or "unknown_merchant"
     amount = str(normalized.get("amount", ""))
@@ -80,6 +82,7 @@ def write_receipt_note(
             clean_rel=clean_rel,
             source_rel=source_rel,
             possible_errors=possible_errors,
+            document_type=document_type,
         ),
         encoding="utf-8",
     )
@@ -90,6 +93,7 @@ def write_receipt_note(
             "receipt_id": stem,
             "owner_user_id": session.user_id,
             "created_at": datetime.now().isoformat(),
+            "document_type": document_type,
             "date": note_date.isoformat(),
             "merchant": merchant,
             "amount": amount,
@@ -138,8 +142,10 @@ def render_markdown(
     clean_rel: Path,
     source_rel: Path,
     possible_errors: list[str],
+    document_type: str = "receipt",
 ) -> str:
     parsed = normalize_receipt_properties(parsed)
+    title = document_title_ru(document_type)
     merchant = str(parsed.get("merchant", ""))
     amount = str(parsed.get("amount", ""))
     time = str(parsed.get("time", ""))
@@ -156,13 +162,13 @@ amount: {yaml_string(amount)}
 category: {yaml_string(category)}
 ---
 
-# Чек — {merchant or "unknown_merchant"} — {amount or "unknown_amount"} AMD
+# {title} — {merchant or "unknown_merchant"} — {amount or "unknown_amount"} AMD
 
 ## Оригинал
 
 ![[{attachment_rel.as_posix()}]]
 
-## Чек на русском
+## {title} на русском
 
 {_render_overview_ru(note_date, time, merchant, amount, category, summary_ru)}
 

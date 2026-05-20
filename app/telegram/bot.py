@@ -22,7 +22,13 @@ from app.telegram.handlers.access import (
 )
 from app.telegram.handlers.common import init_sessions
 from app.telegram.handlers.delete import delete_receipt_command
-from app.telegram.handlers.receipt import handle_callback, handle_non_photo, handle_photo, handle_text
+from app.telegram.handlers.receipt import (
+    handle_callback,
+    handle_non_photo,
+    handle_photo,
+    handle_text,
+    order_command,
+)
 from app.telegram.handlers.receipts import (
     export_receipts_command,
     grant_receipt_command,
@@ -73,6 +79,7 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("receipt", receipt_command))
     application.add_handler(CommandHandler("export_receipts", export_receipts_command))
     application.add_handler(CommandHandler("grant_receipt", grant_receipt_command))
+    application.add_handler(CommandHandler("order", order_command))
     application.add_handler(CallbackQueryHandler(handle_callback))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))

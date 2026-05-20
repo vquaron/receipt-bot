@@ -7,6 +7,11 @@ from typing import Any
 
 from openai import OpenAI, RateLimitError
 
+from app.receipts.document_types import (
+    DOCUMENT_TYPE_ORDER,
+    DOCUMENT_TYPE_RECEIPT,
+    normalize_document_type,
+)
 from app.storage.normalization import normalize_receipt_properties
 
 
@@ -90,6 +95,28 @@ Rules:
 - Return JSON that matches the supplied schema exactly.
 """
 
+ORDER_SYSTEM_PROMPT = """You extract structured purchase data from OCR of a non-fiscal order screenshot. It can be a delivery app order, online store order, cart, confirmation screen, or restaurant/shop screenshot. The text can contain Armenian, Russian, and English.
+
+Use SOURCE OCR as the only primary source.
+Rules:
+- Do not invent facts that are absent from SOURCE OCR.
+- This is not necessarily a fiscal receipt. Extract order date/time, merchant, final paid/total amount, category, and purchased items only when they are visible.
+- The main goal is a clean product table: product name, quantity, unit price, and line total.
+- Ignore irrelevant OCR text: ingredients, composition, allergens, nutrition facts, descriptions, UI labels, app navigation, delivery address, courier/support text, ads, recommendations, ratings, comments, buttons, promo banners, and repeated screen chrome.
+- Do not create separate items from ingredients or product descriptions. If OCR shows "Ingredients:", "Բաղադրություն", "Состав", or similar text under a product, skip that text unless it is clearly part of the product name.
+- For restaurant or grocery orders, keep the ordered item name concise. Keep modifiers/options only if they change the purchased item or price. Do not list unpaid options as separate products.
+- If a product has quantity markers such as "x2", "2 шт", "+ 2", or app quantity controls, put the quantity into quantity. If only one item is implied, use "1".
+- Extract unit_price and line_total only when visible or directly implied by a visible quantity and line total. If uncertain, leave the uncertain field empty and add a note to possible_errors.
+- Extract amount as the final paid/order total, not delivery fee, service fee, discount, subtotal, or a single line item.
+- If date, time, amount, merchant, quantity, price, or line total are not confidently available, return an empty string for the field.
+- Put concise Russian uncertainty notes into possible_errors, mentioning the affected field or item when useful.
+- Translate product names into Russian and English. Do not leave Armenian text in name_ru/name_en unless it is clearly a brand or merchant name.
+- Normalize units: piece/count units such as "հատ", "шт", "pcs", "x" should become "шт" in Russian context and "pcs" in English context; kilogram units such as "կգ", "кг", "kg" should become "кг" in Russian context and "kg" in English context.
+- russian_translation and english_translation must summarize only meaningful order fields and ordered products, not every noisy OCR line.
+- Determine an expense category only when it is reasonably supported by the text, for example Food Delivery, Grocery, Pharmacy, Restaurant, or Online Order.
+- Return JSON that matches the supplied schema exactly.
+"""
+
 
 class OpenAIInvalidJSONError(RuntimeError):
     def __init__(self, raw_response: str) -> None:
@@ -107,13 +134,20 @@ class ParsedReceipt:
     raw_response: str
 
 
-def parse_receipt_text(ocr_text: str, *, api_key: str, model: str) -> ParsedReceipt:
+def parse_receipt_text(
+    ocr_text: str,
+    *,
+    api_key: str,
+    model: str,
+    document_type: str = DOCUMENT_TYPE_RECEIPT,
+) -> ParsedReceipt:
     client = OpenAI(api_key=api_key)
+    prompt = prompt_for_document_type(document_type)
     try:
         response = client.responses.create(
             model=model,
             input=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": prompt},
                 {"role": "user", "content": f"SOURCE OCR:\n{ocr_text}"},
             ],
             text={
@@ -142,6 +176,12 @@ def parse_receipt_text(ocr_text: str, *, api_key: str, model: str) -> ParsedRece
 
     _fill_receipt_fallbacks(parsed, ocr_text)
     return ParsedReceipt(data=normalize_receipt_properties(parsed), raw_response=raw_response)
+
+
+def prompt_for_document_type(document_type: str) -> str:
+    if normalize_document_type(document_type) == DOCUMENT_TYPE_ORDER:
+        return ORDER_SYSTEM_PROMPT
+    return SYSTEM_PROMPT
 
 
 def looks_like_receipt(value: Any) -> bool:

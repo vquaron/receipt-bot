@@ -8,6 +8,8 @@ from typing import Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from app.receipts.document_types import DOCUMENT_TYPE_RECEIPT, normalize_document_type
+
 
 class SessionState(str, Enum):
     PROCESSING_OPENAI = "processing_openai"
@@ -24,6 +26,7 @@ class ReceiptSession:
     source_ocr_path: Path
     temporary_base_name: str
     created_at: datetime
+    document_type: str = DOCUMENT_TYPE_RECEIPT
     parsed_receipt: dict[str, Any] | None = None
     state: SessionState = SessionState.PROCESSING_OPENAI
 
@@ -33,6 +36,7 @@ class ReceiptSession:
         data["clean_ocr_path"] = str(self.clean_ocr_path)
         data["source_ocr_path"] = str(self.source_ocr_path)
         data["created_at"] = self.created_at.isoformat()
+        data["document_type"] = normalize_document_type(self.document_type)
         data["state"] = self.state.value
         return data
 
@@ -45,6 +49,7 @@ class ReceiptSession:
             source_ocr_path=Path(str(data["source_ocr_path"])),
             temporary_base_name=str(data["temporary_base_name"]),
             created_at=datetime.fromisoformat(str(data["created_at"])),
+            document_type=normalize_document_type(data.get("document_type", DOCUMENT_TYPE_RECEIPT)),
             parsed_receipt=data.get("parsed_receipt"),
             state=SessionState(str(data.get("state", SessionState.PROCESSING_OPENAI))),
         )
