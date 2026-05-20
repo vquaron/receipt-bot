@@ -101,19 +101,24 @@ def parse_review_payload(text: str) -> dict[str, object]:
         raise ReviewPayloadError("Исправления должны быть валидным JSON.") from exc
     if not isinstance(payload, dict):
         raise ReviewPayloadError("JSON должен быть объектом.")
-    if set(payload) != set(REVIEW_KEYS):
+    payload_keys = set(payload)
+    expected_keys = set(REVIEW_KEYS)
+    legacy_keys = expected_keys - {"possible_errors"}
+    if payload_keys != expected_keys and payload_keys != legacy_keys:
         raise ReviewPayloadError("JSON содержит неправильный набор полей.")
     if payload.get("currency") != "AMD":
         raise ReviewPayloadError('Поле "currency" должно быть "AMD".')
     if not isinstance(payload.get("items"), list):
         raise ReviewPayloadError('Поле "items" должно быть массивом.')
-    if not isinstance(payload.get("possible_errors"), list):
+    possible_errors = payload.get("possible_errors", [])
+    if not isinstance(possible_errors, list):
         raise ReviewPayloadError('Поле "possible_errors" должно быть массивом строк.')
     for key in REVIEW_KEYS:
         if key not in {"items", "possible_errors"} and not isinstance(payload.get(key), str):
             raise ReviewPayloadError(f'Поле "{key}" должно быть строкой.')
-    if not all(isinstance(item, str) for item in payload["possible_errors"]):
+    if not all(isinstance(item, str) for item in possible_errors):
         raise ReviewPayloadError('Поле "possible_errors" должно быть массивом строк.')
+    payload.setdefault("possible_errors", [])
     for item in payload["items"]:
         if not isinstance(item, dict) or set(item) != set(REVIEW_ITEM_KEYS):
             raise ReviewPayloadError("Каждый товар содержит неправильный набор полей.")

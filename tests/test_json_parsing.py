@@ -83,6 +83,21 @@ def test_review_text_includes_possible_errors() -> None:
     assert "- item 1: название товара распознано неуверенно" in text
 
 
+def test_review_payload_accepts_legacy_payload_without_possible_errors() -> None:
+    payload = {
+        "date": "07-04-2026",
+        "time": "20:41",
+        "merchant": "Զովք",
+        "amount": "4 465,75 AMD",
+        "currency": "AMD",
+        "category": "grocery",
+        "summary_ru": "Покупка",
+        "items": [],
+    }
+    parsed = parse_review_payload(json.dumps(payload, ensure_ascii=False))
+    assert parsed["possible_errors"] == []
+
+
 def test_review_merge_keeps_corrected_possible_errors() -> None:
     parsed = valid_receipt()
     payload = {

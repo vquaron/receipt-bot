@@ -50,8 +50,19 @@ async def receipt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     vault = settings(context).obsidian_vault
     try:
-        note_path = safe_vault_path(vault, record.note_rel)
         user_prefix = f"{user_root_rel(settings(context), update.effective_user.id).as_posix()}/"
+    except ValueError:
+        LOGGER.error(
+            "Invalid USER_VAULT_ROOT configuration while opening receipt for user_id=%s receipt_id=%s query=%r",
+            update.effective_user.id,
+            record.receipt_id,
+            query,
+            exc_info=True,
+        )
+        await update.message.reply_text("Неверная конфигурация хранилища чеков.")
+        return
+    try:
+        note_path = safe_vault_path(vault, record.note_rel)
         image_path = _first_existing_file(
             vault,
             record.files,
