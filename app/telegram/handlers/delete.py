@@ -32,6 +32,7 @@ async def delete_receipt_command(update: Update, context: ContextTypes.DEFAULT_T
             note_name,
             owner_user_id=update.effective_user.id,
             allow_all_users=allow_all,
+            user_vault_root=settings(context).user_vault_root,
         )
     except ReceiptDeleteError as exc:
         await update.message.reply_text(f"Не удалось удалить чек: {exc}")
@@ -49,4 +50,3 @@ async def delete_receipt_command(update: Update, context: ContextTypes.DEFAULT_T
             ]
         )
     )
-

@@ -54,3 +54,29 @@ def test_delete_receipt_rejects_manifest_escape(tmp_path: Path) -> None:
     )
     with pytest.raises(ReceiptDeleteError):
         delete_receipt(vault, "a.md")
+
+
+def test_delete_receipt_does_not_delete_anything_before_manifest_validation(tmp_path: Path) -> None:
+    vault = tmp_path
+    note = vault / "Receipts/2026/04/a.md"
+    image = vault / "Attachments/receipts/2026/04/a.jpg"
+    manifest = vault / "MANIFEST/receipts/2026/04/a.manifest.json"
+    for path in (note, image, manifest):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "note": "Receipts/2026/04/a.md",
+                "files": ["Receipts/2026/04/a.md", "Attachments/receipts/2026/04/a.jpg", "../escape.txt"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ReceiptDeleteError):
+        delete_receipt(vault, "a.md")
+    assert note.exists()
+    assert image.exists()
+    assert manifest.exists()

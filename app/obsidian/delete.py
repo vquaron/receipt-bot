@@ -26,21 +26,39 @@ def delete_receipt(
     *,
     owner_user_id: int | None = None,
     allow_all_users: bool = False,
+    user_vault_root: str = "Users",
 ) -> DeleteResult:
     vault = vault.expanduser().resolve()
-    note_path = _find_note(vault, note_name, owner_user_id=owner_user_id, allow_all_users=allow_all_users)
-    manifest_path = _find_manifest(vault, note_path)
+    user_root = _user_root(user_vault_root)
+    note_path = _find_note(
+        vault,
+        note_name,
+        owner_user_id=owner_user_id,
+        allow_all_users=allow_all_users,
+        user_root=user_root,
+    )
+    manifest_path = _find_manifest(vault, note_path, user_root=user_root)
     if manifest_path:
         rel_paths = _paths_from_manifest(vault, manifest_path, note_path)
     else:
         rel_paths = _paths_from_markdown(note_path.read_text(encoding="utf-8"))
         rel_paths.append(note_path.relative_to(vault).as_posix())
 
-    deleted: list[Path] = []
-    missing: list[Path] = []
+    targets: list[Path] = []
     for rel_path in _dedupe(rel_paths):
         target = _safe_file(vault, rel_path)
-        _ensure_file_owner_scope(vault, target, owner_user_id=owner_user_id, allow_all_users=allow_all_users)
+        _ensure_file_owner_scope(
+            vault,
+            target,
+            owner_user_id=owner_user_id,
+            allow_all_users=allow_all_users,
+            user_root=user_root,
+        )
+        targets.append(target)
+
+    deleted: list[Path] = []
+    missing: list[Path] = []
+    for target in targets:
         if target.exists():
             target.unlink()
             deleted.append(target)
@@ -58,6 +76,7 @@ def _find_note(
     *,
     owner_user_id: int | None,
     allow_all_users: bool,
+    user_root: Path,
 ) -> Path:
     cleaned = note_name.strip().strip('"').strip("'")
     if not cleaned:
@@ -67,11 +86,22 @@ def _find_note(
     candidate = safe_vault_path(vault, cleaned)
     if candidate.exists():
         if candidate.is_file() and candidate.suffix == ".md":
-            _ensure_owner_scope(vault, candidate, owner_user_id=owner_user_id, allow_all_users=allow_all_users)
+            _ensure_owner_scope(
+                vault,
+                candidate,
+                owner_user_id=owner_user_id,
+                allow_all_users=allow_all_users,
+                user_root=user_root,
+            )
             return candidate
         raise ReceiptDeleteError("Receipt note path is not a Markdown file.")
     matches: list[Path] = []
-    for root in _receipt_search_roots(vault, owner_user_id=owner_user_id, allow_all_users=allow_all_users):
+    for root in _receipt_search_roots(
+        vault,
+        owner_user_id=owner_user_id,
+        allow_all_users=allow_all_users,
+        user_root=user_root,
+    ):
         if root.exists():
             matches.extend(path for path in root.glob(f"**/{Path(cleaned).name}") if path.is_file())
     if len(matches) == 1:
@@ -81,22 +111,24 @@ def _find_note(
     raise ReceiptDeleteError("Receipt note was not found.")
 
 
-def _find_manifest(vault: Path, note_path: Path) -> Path | None:
+def _find_manifest(vault: Path, note_path: Path, *, user_root: Path) -> Path | None:
     note_rel = note_path.relative_to(vault).as_posix()
     parts = note_path.relative_to(vault).parts
+    user_root_parts = user_root.parts
+    user_root_len = len(user_root_parts)
     if len(parts) >= 4 and parts[0] == "Receipts":
         expected = vault / "MANIFEST" / "receipts" / parts[1] / parts[2] / f"{note_path.stem}.manifest.json"
         if expected.exists():
             return expected
-    if len(parts) >= 6 and parts[0] == "Users" and parts[2] == "Receipts":
+    if len(parts) >= user_root_len + 5 and parts[:user_root_len] == user_root_parts and parts[user_root_len + 1] == "Receipts":
         expected = (
             vault
-            / "Users"
-            / parts[1]
+            / user_root
+            / parts[user_root_len]
             / "MANIFEST"
             / "receipts"
-            / parts[3]
-            / parts[4]
+            / parts[user_root_len + 2]
+            / parts[user_root_len + 3]
             / f"{note_path.stem}.manifest.json"
         )
         if expected.exists():
@@ -108,7 +140,7 @@ def _find_manifest(vault: Path, note_path: Path) -> Path | None:
             continue
         if manifest.get("note") == note_rel:
             return manifest_path
-    for manifest_path in (vault / "Users").glob("*/MANIFEST/receipts/**/*.manifest.json"):
+    for manifest_path in (vault / user_root).glob("*/MANIFEST/receipts/**/*.manifest.json"):
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
@@ -164,11 +196,17 @@ def _dedupe(values: list[str]) -> list[str]:
     return result
 
 
-def _receipt_search_roots(vault: Path, *, owner_user_id: int | None, allow_all_users: bool) -> list[Path]:
+def _receipt_search_roots(
+    vault: Path,
+    *,
+    owner_user_id: int | None,
+    allow_all_users: bool,
+    user_root: Path,
+) -> list[Path]:
     if owner_user_id is not None and not allow_all_users:
-        return [vault / "Users" / str(owner_user_id) / "Receipts"]
+        return [vault / user_root / str(owner_user_id) / "Receipts"]
     roots = [vault / "Receipts"]
-    roots.extend(path / "Receipts" for path in (vault / "Users").glob("*") if path.is_dir())
+    roots.extend(path / "Receipts" for path in (vault / user_root).glob("*") if path.is_dir())
     return roots
 
 
@@ -178,10 +216,11 @@ def _ensure_owner_scope(
     *,
     owner_user_id: int | None,
     allow_all_users: bool,
+    user_root: Path,
 ) -> None:
     if owner_user_id is None or allow_all_users:
         return
-    owner_root = (vault / "Users" / str(owner_user_id) / "Receipts").resolve()
+    owner_root = (vault / user_root / str(owner_user_id) / "Receipts").resolve()
     if not note_path.resolve().is_relative_to(owner_root):
         raise ReceiptDeleteError("Receipt does not belong to this user.")
 
@@ -192,9 +231,17 @@ def _ensure_file_owner_scope(
     *,
     owner_user_id: int | None,
     allow_all_users: bool,
+    user_root: Path,
 ) -> None:
     if owner_user_id is None or allow_all_users:
         return
-    owner_root = (vault / "Users" / str(owner_user_id)).resolve()
+    owner_root = (vault / user_root / str(owner_user_id)).resolve()
     if not target.resolve().is_relative_to(owner_root):
         raise ReceiptDeleteError("Manifest contains a file outside this user's vault root.")
+
+
+def _user_root(user_vault_root: str) -> Path:
+    root = Path(user_vault_root.strip("/"))
+    if root.is_absolute() or ".." in root.parts:
+        raise ReceiptDeleteError("USER_VAULT_ROOT must be a safe relative path.")
+    return root

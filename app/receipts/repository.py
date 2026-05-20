@@ -93,7 +93,9 @@ class ReceiptRepository:
 
     def _list_all_receipts(self) -> list[ReceiptRecord]:
         paths = list((self.vault / "MANIFEST" / "receipts").glob("**/*.manifest.json"))
-        paths.extend((self.vault / "Users").glob("*/MANIFEST/receipts/**/*.manifest.json"))
+        user_root = _safe_user_root(self.settings)
+        if user_root is not None:
+            paths.extend((self.vault / user_root).glob("*/MANIFEST/receipts/**/*.manifest.json"))
         records = [record for path in paths if (record := self._read_record(path))]
         return sorted(records, key=lambda record: (record.date, record.created_at, record.receipt_id), reverse=True)
 
@@ -133,27 +135,37 @@ class ReceiptRepository:
             return None
         if not isinstance(manifest, dict):
             return None
-        note = manifest.get("note")
-        files = manifest.get("files", [])
-        if not isinstance(note, str) or not isinstance(files, list):
+        note_path = _safe_rel_path(manifest.get("note"))
+        files_raw = manifest.get("files", [])
+        if note_path is None or not isinstance(files_raw, list):
             return None
+        file_paths = [_safe_rel_path(item) for item in files_raw]
+        if any(path is None for path in file_paths):
+            return None
+        files = tuple(path for path in file_paths if path is not None)
         try:
             manifest_rel = manifest_path.relative_to(self.vault)
         except ValueError:
             return None
-        receipt_id = str(manifest.get("receipt_id") or Path(note).stem)
-        owner_user_id = int(manifest.get("owner_user_id") or 0)
+        expected_owner_root = _owner_root_from_manifest(manifest_rel, _safe_user_root(self.settings))
+        if expected_owner_root is not None:
+            if not note_path.is_relative_to(expected_owner_root):
+                return None
+            if any(not file_path.is_relative_to(expected_owner_root) for file_path in files):
+                return None
+        receipt_id = str(manifest.get("receipt_id") or note_path.stem)
+        owner_user_id = _owner_user_id(manifest.get("owner_user_id"))
         return ReceiptRecord(
             receipt_id=receipt_id,
             owner_user_id=owner_user_id,
-            note_rel=Path(note),
+            note_rel=note_path,
             manifest_rel=manifest_rel,
             date=str(manifest.get("date", "")),
             merchant=str(manifest.get("merchant", "")),
             amount=str(manifest.get("amount", "")),
             currency=str(manifest.get("currency", "AMD")),
             created_at=str(manifest.get("created_at", "")),
-            files=tuple(Path(str(item)) for item in files),
+            files=files,
         )
 
 
@@ -198,3 +210,41 @@ def _target_rel_for_copy(
     if suffix:
         return root / "Attachments" / "receipts" / year / month / f"{stem}{rel_path.suffix}"
     return None
+
+
+def _safe_user_root(settings: Settings) -> Path | None:
+    root = Path(settings.user_vault_root.strip("/"))
+    if root.is_absolute() or ".." in root.parts:
+        return None
+    return root
+
+
+def _safe_rel_path(value: object) -> Path | None:
+    if not isinstance(value, str):
+        return None
+    path = Path(value)
+    if path.is_absolute() or ".." in path.parts:
+        return None
+    return path
+
+
+def _owner_root_from_manifest(manifest_rel: Path, user_root: Path | None) -> Path | None:
+    if user_root is None:
+        return None
+    parts = manifest_rel.parts
+    root_parts = user_root.parts
+    root_len = len(root_parts)
+    if len(parts) < root_len + 3:
+        return None
+    if parts[:root_len] != root_parts:
+        return None
+    if parts[root_len + 1 : root_len + 3] != ("MANIFEST", "receipts"):
+        return None
+    return Path(*parts[: root_len + 1])
+
+
+def _owner_user_id(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0

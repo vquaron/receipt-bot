@@ -101,6 +101,73 @@ def test_delete_receipt_rejects_manifest_files_outside_user_root(tmp_path: Path)
     assert foreign.exists()
 
 
+def test_delete_receipt_uses_configured_user_vault_root(tmp_path: Path) -> None:
+    note = tmp_path / "Members/222/Receipts/2026/05/a.md"
+    image = tmp_path / "Members/222/Attachments/receipts/2026/05/a.jpg"
+    manifest = tmp_path / "Members/222/MANIFEST/receipts/2026/05/a.manifest.json"
+    for path in (note, image, manifest):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "note": "Members/222/Receipts/2026/05/a.md",
+                "files": ["Members/222/Receipts/2026/05/a.md", "Members/222/Attachments/receipts/2026/05/a.jpg"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = delete_receipt(tmp_path, "a.md", owner_user_id=222, user_vault_root="Members")
+    assert len(result.deleted) == 3
+    assert not note.exists()
+    assert not image.exists()
+    assert not manifest.exists()
+
+
+def test_find_any_receipt_uses_configured_user_vault_root(tmp_path: Path) -> None:
+    app_settings = settings(tmp_path, user_vault_root="Members")
+    manifest = tmp_path / "Members/222/MANIFEST/receipts/2026/05/a.manifest.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "receipt_id": "a",
+                "owner_user_id": 222,
+                "note": "Members/222/Receipts/2026/05/a.md",
+                "files": ["Members/222/Receipts/2026/05/a.md"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    record = ReceiptRepository(app_settings).find_any_receipt("a")
+    assert record is not None
+    assert record.note_rel.as_posix() == "Members/222/Receipts/2026/05/a.md"
+
+
+def test_find_any_receipt_skips_unsafe_manifest_paths(tmp_path: Path) -> None:
+    app_settings = settings(tmp_path)
+    manifest = tmp_path / "Users/222/MANIFEST/receipts/2026/05/a.manifest.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "receipt_id": "a",
+                "owner_user_id": 222,
+                "note": "../escape.md",
+                "files": ["../escape.md"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert ReceiptRepository(app_settings).find_any_receipt("a") is None
+
+
 def _session(tmp_path: Path, *, user_id: int) -> ReceiptSession:
     created_at = datetime(2026, 5, 20, 12, 0, 0)
     image = tmp_path / f"Users/{user_id}/Attachments/receipts/_tmp/2026/05/tmp.jpg"
