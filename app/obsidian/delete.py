@@ -41,7 +41,7 @@ def delete_receipt(
     if manifest_path:
         rel_paths = _paths_from_manifest(vault, manifest_path, note_path)
     else:
-        rel_paths = _paths_from_markdown(note_path.read_text(encoding="utf-8"))
+        rel_paths = _paths_from_markdown(note_path.read_text(encoding="utf-8"), user_root=user_root)
         rel_paths.append(note_path.relative_to(vault).as_posix())
 
     targets: list[Path] = []
@@ -165,14 +165,15 @@ def _paths_from_manifest(vault: Path, manifest_path: Path, note_path: Path) -> l
     return rel_paths
 
 
-def _paths_from_markdown(text: str) -> list[str]:
+def _paths_from_markdown(text: str, *, user_root: Path) -> list[str]:
     matches = re.findall(r"!\[\[([^]\n]+)\]\]|\[\[([^]\n]+)\]\]", text)
     flattened = [first or second for first, second in matches]
+    user_root_pattern = re.escape(user_root.as_posix())
     return [
         path
         for path in flattened
         if path.startswith(("Attachments/receipts/", "OCR/", "OCR_VERIFIED/", "DEBUG/openai/"))
-        or re.match(r"^Users/\d+/(Attachments/receipts|OCR|OCR_VERIFIED|DEBUG/openai)/", path)
+        or re.match(rf"^{user_root_pattern}/\d+/(Attachments/receipts|OCR|OCR_VERIFIED|DEBUG/openai)/", path)
     ]
 
 

@@ -12,6 +12,8 @@ from app.obsidian.delete import ReceiptDeleteError, delete_receipt
 from app.obsidian.writer import write_receipt_note
 from app.receipts.repository import ReceiptRepository
 from app.review.models import ReceiptSession
+from app.telegram.handlers.receipt import _quota_message
+from app.telegram.handlers.receipts import _first_existing_file
 from app.users.access_service import AccessControl
 from app.users.models import UserRole
 from app.users.quotas import QuotaService
@@ -41,6 +43,18 @@ def test_access_bootstraps_roles(tmp_path: Path) -> None:
     assert access.is_allowed(333)
 
 
+def test_revoked_env_user_stays_revoked_after_restart(tmp_path: Path) -> None:
+    app_settings = settings(tmp_path)
+    access = AccessControl(app_settings)
+
+    assert access.revoke(222)
+    assert not access.is_allowed(222)
+
+    restarted_access = AccessControl(app_settings)
+    assert not restarted_access.is_allowed(222)
+    assert restarted_access.is_allowed(111)
+
+
 def test_quota_limits_regular_users_but_not_admins(tmp_path: Path) -> None:
     quota = QuotaService(settings(tmp_path))
     now = datetime(2026, 5, 20, 12, 0, 0)
@@ -50,6 +64,11 @@ def test_quota_limits_regular_users_but_not_admins(tmp_path: Path) -> None:
     assert not decision.allowed
     assert decision.reason == "daily_limit"
     assert quota.check(111, UserRole.ADMIN, now=now).allowed
+
+
+def test_quota_message_describes_attempt_limit() -> None:
+    assert "лимит попыток" in _quota_message("daily_limit", 1, 1, 1, 10)
+    assert "лимит попыток" in _quota_message("monthly_limit", 10, 20, 20, 20)
 
 
 def test_receipt_note_is_written_under_user_root_and_indexed(tmp_path: Path) -> None:
@@ -124,6 +143,45 @@ def test_delete_receipt_uses_configured_user_vault_root(tmp_path: Path) -> None:
     assert not note.exists()
     assert not image.exists()
     assert not manifest.exists()
+
+
+def test_delete_receipt_markdown_fallback_uses_configured_user_vault_root(tmp_path: Path) -> None:
+    note = tmp_path / "Members/222/Receipts/2026/05/a.md"
+    image = tmp_path / "Members/222/Attachments/receipts/2026/05/a.jpg"
+    clean_ocr = tmp_path / "Members/222/OCR/2026/05/a.clean.hy.txt"
+    for path in (note, image, clean_ocr):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    image.write_text("image", encoding="utf-8")
+    clean_ocr.write_text("ocr", encoding="utf-8")
+    note.write_text(
+        "\n".join(
+            [
+                "![[Members/222/Attachments/receipts/2026/05/a.jpg]]",
+                "[[Members/222/OCR/2026/05/a.clean.hy.txt]]",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = delete_receipt(tmp_path, "a.md", owner_user_id=222, user_vault_root="Members")
+    assert len(result.deleted) == 3
+    assert not note.exists()
+    assert not image.exists()
+    assert not clean_ocr.exists()
+
+
+def test_first_existing_file_accepts_configured_user_root(tmp_path: Path) -> None:
+    image = tmp_path / "Members/222/Attachments/receipts/2026/05/a.jpg"
+    image.parent.mkdir(parents=True, exist_ok=True)
+    image.write_text("image", encoding="utf-8")
+
+    found = _first_existing_file(
+        tmp_path,
+        [Path("Members/222/Attachments/receipts/2026/05/a.jpg")],
+        prefixes=("Members/222/",),
+        suffixes=(".jpg",),
+    )
+    assert found == image
 
 
 def test_find_any_receipt_uses_configured_user_vault_root(tmp_path: Path) -> None:

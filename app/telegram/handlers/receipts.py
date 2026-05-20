@@ -10,6 +10,7 @@ from app.receipts.repository import ReceiptCopyError, ReceiptNotFoundError
 from app.storage.paths import safe_vault_path
 from app.telegram.handlers.access import ensure_access
 from app.telegram.handlers.common import access, receipts, send_text_chunks, settings
+from app.users.paths import user_root_rel
 
 
 LOGGER = logging.getLogger(__name__)
@@ -50,10 +51,11 @@ async def receipt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     vault = settings(context).obsidian_vault
     try:
         note_path = safe_vault_path(vault, record.note_rel)
+        user_prefix = f"{user_root_rel(settings(context), update.effective_user.id).as_posix()}/"
         image_path = _first_existing_file(
             vault,
             record.files,
-            prefixes=("Users/",),
+            prefixes=(user_prefix,),
             suffixes=(".jpg", ".jpeg", ".png"),
         )
     except ValueError:

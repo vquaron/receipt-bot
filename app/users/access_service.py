@@ -142,6 +142,12 @@ class AccessControl:
         ):
             profile = self.repository.get(user_id)
             role = self._default_role(user_id)
+            if (
+                role != UserRole.ADMIN
+                and profile
+                and profile.status in {UserStatus.REJECTED, UserStatus.REVOKED}
+            ):
+                continue
             if profile and profile.status == UserStatus.ALLOWED and profile.role == role:
                 continue
             now = datetime.now()
@@ -166,4 +172,3 @@ class AccessControl:
         if user_id in self.settings.privileged_telegram_user_ids:
             return UserRole.PRIVILEGED
         return UserRole.REGULAR
-
