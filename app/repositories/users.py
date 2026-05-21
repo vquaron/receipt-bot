@@ -1,0 +1,206 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime
+from pathlib import Path
+
+from app.config import Settings
+from app.db import initialize_database
+from app.db.connection import connect_database
+from app.repositories.access_requests import AccessRequestRepository
+from app.users.models import AccessRequest, UserProfile, UserRole, UserStatus, profile_vault_root
+
+
+class UserRepository:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        initialize_database(settings)
+        self.requests = AccessRequestRepository(settings)
+
+    def get(self, user_id: int) -> UserProfile | None:
+        with connect_database(self.settings) as connection:
+            row = connection.execute(
+                """
+                select telegram_user_id, username, full_name, status, role, created_at, updated_at, approved_by, source
+                from users
+                where telegram_user_id = ?
+                """,
+                (user_id,),
+            ).fetchone()
+        return self._profile_from_row(row) if row is not None else None
+
+    def list_users(self) -> list[UserProfile]:
+        with connect_database(self.settings) as connection:
+            rows = connection.execute(
+                """
+                select telegram_user_id, username, full_name, status, role, created_at, updated_at, approved_by, source
+                from users
+                order by telegram_user_id
+                """
+            ).fetchall()
+        return [self._profile_from_row(row) for row in rows]
+
+    def save_profile(self, profile: UserProfile) -> None:
+        rejected_at = profile.updated_at.isoformat() if profile.status == UserStatus.REJECTED else None
+        revoked_at = profile.updated_at.isoformat() if profile.status == UserStatus.REVOKED else None
+        with connect_database(self.settings) as connection:
+            connection.execute(
+                """
+                insert into users(
+                    telegram_user_id,
+                    username,
+                    full_name,
+                    role,
+                    status,
+                    created_at,
+                    updated_at,
+                    approved_by,
+                    rejected_at,
+                    revoked_at,
+                    source
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict(telegram_user_id) do update set
+                    username = excluded.username,
+                    full_name = excluded.full_name,
+                    role = excluded.role,
+                    status = excluded.status,
+                    updated_at = excluded.updated_at,
+                    approved_by = excluded.approved_by,
+                    rejected_at = excluded.rejected_at,
+                    revoked_at = excluded.revoked_at,
+                    source = excluded.source
+                """,
+                (
+                    profile.user_id,
+                    profile.username,
+                    profile.full_name,
+                    profile.role.value,
+                    profile.status.value,
+                    profile.created_at.isoformat(),
+                    profile.updated_at.isoformat(),
+                    profile.approved_by,
+                    rejected_at,
+                    revoked_at,
+                    profile.source,
+                ),
+            )
+
+    def delete_profile(self, user_id: int) -> None:
+        with connect_database(self.settings) as connection:
+            connection.execute("delete from users where telegram_user_id = ?", (user_id,))
+
+    def load_users(self) -> dict[str, UserProfile]:
+        return {str(profile.user_id): profile for profile in self.list_users()}
+
+    def pending_request(self, user_id: int) -> AccessRequest | None:
+        return self.requests.pending_request(user_id)
+
+    def rejected_request(self, user_id: int) -> AccessRequest | None:
+        return self.requests.rejected_request(user_id)
+
+    def save_pending_request(self, request: AccessRequest) -> None:
+        self.requests.save_pending_request(request)
+
+    def resolve_pending_request(
+        self,
+        user_id: int,
+        *,
+        status: str,
+        resolved_by: int | None = None,
+        decision_reason: str = "",
+    ) -> AccessRequest | None:
+        return self.requests.resolve_pending_request(
+            user_id,
+            status=status,
+            resolved_by=resolved_by,
+            decision_reason=decision_reason,
+        )
+
+    def pop_pending_request(self, user_id: int) -> AccessRequest | None:
+        return self.resolve_pending_request(user_id, status="cancelled")
+
+    def save_rejected_request(self, request: AccessRequest, *, resolved_by: int | None = None) -> None:
+        self.requests.save_rejected_request(request, resolved_by=resolved_by)
+
+    def load_requests(self) -> dict[str, dict[str, AccessRequest]]:
+        return self.requests.load_requests()
+
+    def migrate_legacy_access(self, legacy_path: Path, *, user_vault_root: str) -> None:
+        requests = self.load_requests()
+        if self.list_users() or requests["pending"] or requests["rejected"] or not legacy_path.exists():
+            return
+        try:
+            legacy = json.loads(legacy_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return
+        if not isinstance(legacy, dict):
+            return
+
+        now = datetime.now()
+        for raw_user_id, payload in _legacy_bucket(legacy, "allowed").items():
+            try:
+                user_id = int(raw_user_id)
+            except ValueError:
+                continue
+            self.save_profile(
+                UserProfile(
+                    user_id=user_id,
+                    full_name=_payload_text(payload, "full_name"),
+                    username=_payload_text(payload, "username"),
+                    status=UserStatus.ALLOWED,
+                    role=UserRole.REGULAR,
+                    vault_root=profile_vault_root(user_id, user_vault_root),
+                    created_at=now,
+                    updated_at=now,
+                    approved_by=None,
+                    source="legacy_access_json",
+                )
+            )
+
+        for bucket, status in (("pending", "pending"), ("rejected", "rejected")):
+            for raw_user_id, payload in _legacy_bucket(legacy, bucket).items():
+                try:
+                    user_id = int(raw_user_id)
+                except ValueError:
+                    continue
+                request = AccessRequest(
+                    user_id=user_id,
+                    full_name=_payload_text(payload, "full_name"),
+                    username=_payload_text(payload, "username"),
+                    created_at=now,
+                )
+                if status == "pending":
+                    self.save_pending_request(request)
+                else:
+                    self.save_rejected_request(request)
+
+    def _profile_from_row(self, row) -> UserProfile:
+        user_id = int(row["telegram_user_id"])
+        return UserProfile(
+            user_id=user_id,
+            full_name=str(row["full_name"] or ""),
+            username=str(row["username"] or ""),
+            status=UserStatus(str(row["status"])),
+            role=UserRole(str(row["role"])),
+            vault_root=profile_vault_root(user_id, self.settings.user_vault_root),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            updated_at=datetime.fromisoformat(str(row["updated_at"])),
+            approved_by=int(row["approved_by"]) if row["approved_by"] is not None else None,
+            source=str(row["source"]),
+        )
+
+
+def _legacy_bucket(data: dict[str, object], name: str) -> dict[str, object]:
+    value = data.get(name)
+    if isinstance(value, dict):
+        return {str(key): payload for key, payload in value.items()}
+    if isinstance(value, list):
+        return {str(item): {} for item in value}
+    return {}
+
+
+def _payload_text(payload: object, key: str) -> str:
+    if isinstance(payload, dict):
+        return str(payload.get(key, ""))
+    return ""

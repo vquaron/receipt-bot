@@ -45,6 +45,9 @@ def test_approve_and_revoke(tmp_path: Path) -> None:
     assert access.is_allowed(333)
     assert access.revoke(333)
     assert not access.is_allowed(333)
+    assert (tmp_path / "data" / "app.db").exists()
+    assert not (tmp_path / "data" / "users" / "users.json").exists()
+    assert not (tmp_path / "data" / "users" / "access_requests.json").exists()
 
 
 def test_legacy_migration_skips_invalid_user_ids(tmp_path: Path) -> None:
@@ -66,3 +69,8 @@ def test_legacy_migration_skips_invalid_user_ids(tmp_path: Path) -> None:
     assert access.is_allowed(333)
     assert access.is_pending(444)
     assert access.repository.rejected_request(555) is not None
+
+    restarted_access = AccessControl(app_settings)
+    requests = restarted_access.repository.load_requests()
+    assert sorted(requests["pending"]) == ["444"]
+    assert sorted(requests["rejected"]) == ["555"]

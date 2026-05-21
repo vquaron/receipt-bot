@@ -148,15 +148,16 @@ ALLOWED_TELEGRAM_USER_IDS=123456789,987654321
 PRIVILEGED_TELEGRAM_USER_IDS=
 ```
 
-Админы всегда считаются разрешёнными пользователями. Runtime-состояние хранится в:
+Админы всегда считаются разрешёнными пользователями. Пользователи, роли и заявки на доступ хранятся в SQLite:
 
 ```text
-data/users/users.json
-data/users/access_requests.json
+data/app.db
 data/sessions/
 data/corrections.json
 data/usage/YYYY-MM/<user_id>.json
 ```
+
+Если остался старый `data/access.json`, бот один раз импортирует валидных legacy-пользователей и заявки в SQLite. Новые `data/users/users.json` и `data/users/access_requests.json` больше не являются основным хранилищем.
 
 Если пользователь не в allowlist, бот не скачивает фото, не вызывает Google Vision, не вызывает OpenAI и не создаёт файлы. Вместо этого создаётся pending-заявка, а всем администраторам приходит сообщение с кнопками `Approve` / `Reject`.
 
@@ -364,14 +365,14 @@ WEBHOOK_PORT=8080
 python -m pytest -q
 ```
 
-Тесты покрывают path safety, JSON parsing, Markdown rendering, access control, scoped correction rules, manifest deletion, user isolation, per-user receipt index/export и user quotas.
+Тесты покрывают path safety, JSON parsing, Markdown rendering, access control, SQLite migrations, scoped correction rules, manifest deletion, user isolation, per-user receipt index/export и user quotas.
 
 ## 15. Ограничения MVP
 
-- без базы данных;
+- без внешней базы данных; локальное SQLite-хранилище используется для DB-first foundation и доступа пользователей;
 - без веб-интерфейса;
 - без очереди задач и фоновых воркеров;
 - незавершённые review-сессии хранятся в файлах `data/sessions`;
-- пользователи, роли, заявки и usage-лимиты хранятся в JSON-файлах в `data`;
+- usage-лимиты и часть runtime-состояния пока ещё хранятся в JSON-файлах в `data`;
 - используется один прямой поток обработки на пользователя;
 - правила исправлений простые и основаны на точных заменах значений.

@@ -35,13 +35,20 @@ def apply_migrations(connection: sqlite3.Connection) -> None:
         applied_at = datetime.now().isoformat()
         migration_name = migration.name.replace("'", "''")
         migration_applied_at = applied_at.replace("'", "''")
-        connection.executescript(
-            f"""
-            {migration.sql}
-            insert into schema_migrations(version, name, applied_at)
-            values ({migration.version}, '{migration_name}', '{migration_applied_at}');
-            """
-        )
+        try:
+            connection.executescript(
+                f"""
+                begin immediate;
+                {migration.sql}
+                insert into schema_migrations(version, name, applied_at)
+                values ({migration.version}, '{migration_name}', '{migration_applied_at}');
+                commit;
+                """
+            )
+        except sqlite3.Error:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
 
 
 def _ensure_migrations_table(connection: sqlite3.Connection) -> None:
