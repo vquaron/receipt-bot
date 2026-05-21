@@ -20,9 +20,9 @@ structured SQLite data rather than parse Markdown.
 - Current DB: SQLite in `data/app.db` with idempotent migrations, WAL, foreign
   keys, and busy timeout.
 - Current human-readable export: Obsidian Markdown in `OBSIDIAN_VAULT`.
-- Current processing state: a hybrid model. Users and access requests are in
-  SQLite; receipt files, review sessions, quotas, and correction rules still use
-  the compatible file-based MVP paths until later PRs migrate them.
+- Current processing state: a hybrid model. Users, access requests, and quota
+  events are in SQLite; receipt files, review sessions, and correction rules
+  still use the compatible file-based MVP paths until later PRs migrate them.
 
 ## Source of truth
 
@@ -36,7 +36,8 @@ Files = images, OCR artifacts, debug artifacts, and generated exports
 
 Current implementation status:
 
-- SQLite is already the source of truth for users and access requests.
+- SQLite is already the source of truth for users, access requests, and quota
+  usage events.
 - SQLite schema already includes planned tables for documents, items, files,
   processing sessions, usage events, correction rules, magic links, and web
   sessions.
@@ -114,8 +115,8 @@ Current persistent files:
 - `Users/<telegram_user_id>/OCR_VERIFIED/YYYY/MM/<file>.verified.hy.txt`
 - `Users/<telegram_user_id>/MANIFEST/receipts/YYYY/MM/<file>.manifest.json`
 - `Users/<telegram_user_id>/DEBUG/openai/...` only for invalid OpenAI JSON
+- `data/app.db` for users, access requests, and `usage_events`
 - `data/sessions/` for review sessions
-- `data/usage/YYYY-MM/<user_id>.json` for quota counters
 - `data/corrections.json` for scoped correction rules
 
 Target storage direction:
@@ -149,8 +150,12 @@ Current quotas:
 - Admins are unlimited.
 - Privileged users are unlimited by default.
 - Regular users have daily/monthly attempt limits.
-- Quotas are currently stored in JSON under `data/usage`.
-- Target model is SQLite `usage_events`, counted by `receipt_attempt`.
+- Quotas are stored in SQLite `usage_events` as `receipt_attempt` events.
+- Attempts are recorded after access and limit checks, before image download,
+  OCR, and OpenAI.
+- Admin and privileged attempts are also recorded for audit even when their
+  limits are unlimited.
+- Legacy JSON counters in `data/usage` are not imported and are cleaned up.
 
 Future web authorization:
 
@@ -192,11 +197,10 @@ Future web authorization:
 
 - Receipt documents are not yet persisted through DB repositories despite the
   schema existing.
-- `document_items`, `document_files`, `processing_sessions`, `usage_events`,
+- `document_items`, `document_files`, `processing_sessions`,
   `correction_rules`, `magic_links`, and `web_sessions` are schema-level
   foundations, not fully wired into runtime logic yet.
 - Review sessions are still file-based in `data/sessions`.
-- Quotas are still JSON counters rather than SQLite usage events.
 - Correction rules are still stored in `data/corrections.json`.
 - Temporary image/OCR files are still placed under the Obsidian vault `_tmp`
   path during processing.
@@ -216,6 +220,7 @@ Tests are run with:
 Current tests cover:
 
 - access control and SQLite-backed access persistence;
+- SQLite-backed quota usage events;
 - SQLite connection and migration behavior, including rollback on failed
   migration;
 - JSON parsing and receipt detection;
@@ -250,4 +255,3 @@ gcloud auth application-default set-quota-project PROJECT_ID
 ## Last updated
 
 2026-05-22
-

@@ -2,6 +2,40 @@
 
 ## 2026-05-22
 
+### Move quotas to SQLite usage events
+
+**Summary:** Replaced JSON quota counters with SQLite `usage_events` for
+`receipt_attempt` enforcement and audit.
+**Files changed:**
+
+- `app/repositories/usage.py`
+- `app/users/quotas.py`
+- `app/telegram/handlers/receipt.py`
+- `tests/test_usage_events.py`
+- `README.md`
+- `docs/PROJECT_STATE.md`
+- `docs/DECISIONS.md`
+- `docs/TASK_LOG.md`
+- `docs/NEXT_STEPS.md`
+
+**Details:**
+
+- Added `UsageRepository` with event recording, event counting, atomic
+  `record_attempt_if_allowed`, and safe cleanup of legacy `data/usage/*.json`.
+- Updated `QuotaService` to read/write SQLite usage events while preserving
+  compatibility methods.
+- Telegram photo handling now checks and records quota attempts atomically before
+  downloading images or calling OCR/OpenAI.
+- Admin and privileged attempts are recorded for audit even when unlimited.
+
+**Reason:** Quotas are cost-control and audit data, so they belong in SQLite
+with the rest of structured application state.
+**Validation:** `./.venv/bin/python -m pytest -q` passed.
+**Follow-ups:** Move processing sessions to SQLite and move temporary files out
+of the Obsidian vault.
+**Related decisions:** `2026-05-22 - Event-based quotas in SQLite`;
+`2026-05-21 - SQLite as source of truth`.
+
 ### Add persistent project context docs
 
 **Summary:** Added repository-native context files for future Codex sessions and
@@ -115,4 +149,3 @@ a time.
 **Follow-ups:**  
 **Related decisions:**  
 -->
-
