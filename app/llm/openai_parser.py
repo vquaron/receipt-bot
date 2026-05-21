@@ -85,7 +85,7 @@ Rules:
 - Extract merchant from the receipt itself. Prefer the quoted legal/store name before "ՍՊԸ", "ООО", or similar legal suffix. Remove surrounding quotation marks. Normalize known store descriptors to a stable readable name when obvious, e.g. "Զովք Սուպերմարկետ" -> "Zovq Supermarket".
 - Extract amount as the final paid/total amount, not a line-item price and not VAT.
 - If date, time, amount, or merchant are not confidently available, return an empty string.
-- Put uncertainty notes into possible_errors.
+- Put uncertainty notes into possible_errors. Keep them in Russian, concise, and useful for manual review. Mention the affected field when possible, for example "amount: сумма не совпадает с суммой строк" or "item 3: название товара распознано неуверенно". Include only fields that caused OCR difficulty or look illogical in context; do not add generic warnings.
 - Correct only obvious OCR mistakes.
 - Russian unit words can be misrecognized with visually similar Armenian letters. For example, "շտ" or "ՇՏ" next to a quantity should usually be read as Russian "шт" when the surrounding product text is Russian.
 - Extract product rows into items. Each item must include original product name, Russian name, English name, unit price, quantity, unit, and line total. Translate Armenian product words in name_ru and name_en; do not leave Armenian words in name_ru/name_en unless they are clearly brand names or merchant names. If a product word is corrupted by OCR and cannot be confidently translated, use the closest obvious correction only when safe, otherwise keep the uncertain fragment and add a note to possible_errors.

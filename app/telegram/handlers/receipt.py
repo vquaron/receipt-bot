@@ -329,10 +329,10 @@ async def create_note_from_review(session: ReceiptSession, reply_target, context
 
 def _quota_message(reason: str, daily_used: int, daily_limit: int, monthly_used: int, monthly_limit: int) -> str:
     if reason == "daily_limit":
-        return f"Дневной лимит обработки чеков исчерпан: {daily_used}/{daily_limit}."
+        return f"Дневной лимит попыток обработки чеков исчерпан: {daily_used}/{daily_limit}."
     if reason == "monthly_limit":
-        return f"Месячный лимит обработки чеков исчерпан: {monthly_used}/{monthly_limit}."
-    return "Лимит обработки чеков исчерпан."
+        return f"Месячный лимит попыток обработки чеков исчерпан: {monthly_used}/{monthly_limit}."
+    return "Лимит попыток обработки чеков исчерпан."
 
 
 def _consume_document_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> tuple[str, bool]:

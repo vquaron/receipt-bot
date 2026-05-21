@@ -4,7 +4,7 @@ import pytest
 
 from app.llm.openai_parser import looks_like_receipt, prompt_for_document_type
 from app.receipts.document_types import DOCUMENT_TYPE_ORDER
-from app.review.receipt_review import ReviewPayloadError, parse_review_payload
+from app.review.receipt_review import ReviewPayloadError, merge_review_payload, parse_review_payload, render_review_text
 
 
 def valid_receipt() -> dict[str, object]:
@@ -58,6 +58,7 @@ def test_review_payload_accepts_code_fence() -> None:
         "currency": "AMD",
         "category": "grocery",
         "summary_ru": "Покупка",
+        "possible_errors": ["amount: сумма выглядит неуверенно"],
         "items": [],
     }
     parsed = parse_review_payload("```json\n" + json.dumps(payload, ensure_ascii=False) + "\n```")
@@ -65,6 +66,7 @@ def test_review_payload_accepts_code_fence() -> None:
     assert parsed["merchant"] == "Zovq Supermarket"
     assert parsed["amount"] == "4465.75"
     assert parsed["category"] == "Grocery"
+    assert parsed["possible_errors"] == ["amount: сумма выглядит неуверенно"]
 
 
 def test_order_prompt_ignores_ingredients_and_keeps_product_rows() -> None:
@@ -72,3 +74,50 @@ def test_order_prompt_ignores_ingredients_and_keeps_product_rows() -> None:
     assert "ingredients" in prompt.lower()
     assert "skip" in prompt.lower()
     assert "product name, quantity, unit price, and line total" in prompt
+
+
+def test_review_text_includes_possible_errors() -> None:
+    text = render_review_text(
+        {
+            **valid_receipt(),
+            "possible_errors": [
+                "amount: итоговая сумма не совпадает с товарами",
+                "item 1: название товара распознано неуверенно",
+            ],
+        }
+    )
+    assert "Возможные ошибки распознавания:" in text
+    assert "- amount: итоговая сумма не совпадает с товарами" in text
+    assert "- item 1: название товара распознано неуверенно" in text
+
+
+def test_review_payload_accepts_legacy_payload_without_possible_errors() -> None:
+    payload = {
+        "date": "07-04-2026",
+        "time": "20:41",
+        "merchant": "Զովք",
+        "amount": "4 465,75 AMD",
+        "currency": "AMD",
+        "category": "grocery",
+        "summary_ru": "Покупка",
+        "items": [],
+    }
+    parsed = parse_review_payload(json.dumps(payload, ensure_ascii=False))
+    assert parsed["possible_errors"] == []
+
+
+def test_review_merge_keeps_corrected_possible_errors() -> None:
+    parsed = valid_receipt()
+    payload = {
+        "date": "2026-04-07",
+        "time": "20:41:00",
+        "merchant": "Zovq Supermarket",
+        "amount": "4465.75",
+        "currency": "AMD",
+        "category": "Grocery",
+        "summary_ru": "Покупка продуктов",
+        "possible_errors": ["date: проверено вручную"],
+        "items": [],
+    }
+    merged = merge_review_payload(parsed, payload)
+    assert merged["possible_errors"] == ["date: проверено вручную"]
