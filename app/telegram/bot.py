@@ -9,6 +9,7 @@ from telegram.ext import (
 )
 
 from app.config import Settings, load_settings
+from app.db import initialize_database
 from app.receipts.repository import ReceiptRepository
 from app.security.access_control import AccessControl
 from app.storage.corrections import CorrectionStore
@@ -36,6 +37,7 @@ from app.users.quotas import QuotaService
 def main() -> None:
     settings = load_settings()
     configure_logging(settings)
+    initialize_database(settings)
     application = build_application(settings)
     if settings.bot_mode == "webhook":
         if not settings.webhook_url or not settings.webhook_secret_token:

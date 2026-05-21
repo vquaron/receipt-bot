@@ -6,5 +6,13 @@ __pycache__/
 .DS_Store
 .pytest_cache/
 data/access.json
+data/*.db
+data/*.db-*
+data/storage/
+data/tmp/
+data/exports/
+data/debug/
+data/users/
+data/usage/
 data/sessions/
 data/corrections.json
