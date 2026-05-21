@@ -46,7 +46,39 @@ def test_migrations_are_idempotent(tmp_path: Path) -> None:
 
     with connect_database(app_settings) as connection:
         rows = connection.execute("select version, name from schema_migrations").fetchall()
-    assert [(row["version"], row["name"]) for row in rows] == [(1, "initial_storage_schema")]
+    assert [(row["version"], row["name"]) for row in rows] == [
+        (1, "initial_storage_schema"),
+        (2, "access_requests_unique_pending_user"),
+    ]
+
+
+def test_pending_access_request_is_unique_per_user(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    initialize_database(app_settings)
+
+    with connect_database(app_settings) as connection:
+        connection.execute(
+            """
+            insert into access_requests(id, telegram_user_id, status, created_at)
+            values (?, ?, ?, ?)
+            """,
+            ("one", 777, "pending", "now"),
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                insert into access_requests(id, telegram_user_id, status, created_at)
+                values (?, ?, ?, ?)
+                """,
+                ("two", 777, "pending", "now"),
+            )
+        connection.execute(
+            """
+            insert into access_requests(id, telegram_user_id, status, created_at)
+            values (?, ?, ?, ?)
+            """,
+            ("three", 777, "rejected", "now"),
+        )
 
 
 def test_failed_migration_rolls_back_partial_schema(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

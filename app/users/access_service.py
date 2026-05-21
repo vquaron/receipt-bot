@@ -57,8 +57,8 @@ class AccessControl:
         )
         if self.is_allowed(request.user_id) or self.is_pending(request.user_id):
             return request, False
-        self.repository.save_pending_request(request)
-        return request, True
+        created = self.repository.save_pending_request(request)
+        return request, created
 
     def approve(self, user_id: int, *, approved_by: int | None = None, role: UserRole | None = None) -> None:
         now = datetime.now()

@@ -4,7 +4,6 @@ from datetime import datetime
 from uuid import uuid4
 
 from app.config import Settings
-from app.db import initialize_database
 from app.db.connection import connect_database
 from app.users.models import AccessRequest
 
@@ -12,7 +11,6 @@ from app.users.models import AccessRequest
 class AccessRequestRepository:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        initialize_database(settings)
 
     def pending_request(self, user_id: int) -> AccessRequest | None:
         return self._request_by_status(user_id, "pending")
@@ -20,10 +18,8 @@ class AccessRequestRepository:
     def rejected_request(self, user_id: int) -> AccessRequest | None:
         return self._request_by_status(user_id, "rejected")
 
-    def save_pending_request(self, request: AccessRequest) -> None:
-        if self.pending_request(request.user_id) is not None:
-            return
-        self._insert_request(request, "pending")
+    def save_pending_request(self, request: AccessRequest) -> bool:
+        return self._insert_request(request, "pending", ignore_conflicts=True)
 
     def resolve_pending_request(
         self,
@@ -96,9 +92,11 @@ class AccessRequestRepository:
         *,
         resolved_at: datetime | None = None,
         resolved_by: int | None = None,
-    ) -> None:
+        ignore_conflicts: bool = False,
+    ) -> bool:
+        conflict_clause = " on conflict do nothing" if ignore_conflicts else ""
         with connect_database(self.settings) as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 insert into access_requests(
                     id,
@@ -111,7 +109,8 @@ class AccessRequestRepository:
                     resolved_by
                 )
                 values (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+                """
+                + conflict_clause,
                 (
                     uuid4().hex,
                     request.user_id,
@@ -123,6 +122,7 @@ class AccessRequestRepository:
                     resolved_by,
                 ),
             )
+        return cursor.rowcount > 0
 
 
 def _request_from_row(row) -> AccessRequest:

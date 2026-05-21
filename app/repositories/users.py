@@ -99,8 +99,8 @@ class UserRepository:
     def rejected_request(self, user_id: int) -> AccessRequest | None:
         return self.requests.rejected_request(user_id)
 
-    def save_pending_request(self, request: AccessRequest) -> None:
-        self.requests.save_pending_request(request)
+    def save_pending_request(self, request: AccessRequest) -> bool:
+        return self.requests.save_pending_request(request)
 
     def resolve_pending_request(
         self,

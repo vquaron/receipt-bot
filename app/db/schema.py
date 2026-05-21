@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 INITIAL_SCHEMA_SQL = """
@@ -43,6 +43,10 @@ create table if not exists access_requests (
 
 create index if not exists idx_access_requests_user_status
 on access_requests(telegram_user_id, status);
+
+create unique index if not exists idx_access_requests_unique_pending_user
+on access_requests(telegram_user_id)
+where status = 'pending';
 
 create table if not exists documents (
     id text primary key,
