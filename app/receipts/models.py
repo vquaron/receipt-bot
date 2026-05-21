@@ -16,4 +16,4 @@ class ReceiptRecord:
     currency: str
     created_at: str
     files: tuple[Path, ...]
-
+    document_type: str = "receipt"

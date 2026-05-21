@@ -16,6 +16,14 @@ from app.ocr.google_vision import (
     GoogleVisionNetworkError,
 )
 from app.pipeline.receipt_pipeline import parse_for_review, run_ocr
+from app.receipts.document_classifier import classify_document_type
+from app.receipts.document_types import (
+    DOCUMENT_TYPE_ORDER,
+    DOCUMENT_TYPE_RECEIPT,
+    document_genitive_ru,
+    document_prepositional_ru,
+    normalize_document_type,
+)
 from app.review.models import ReceiptSession, SessionState, review_keyboard
 from app.review.receipt_review import (
     ReviewPayloadError,
@@ -39,6 +47,19 @@ from app.users.paths import user_dated_relpath
 
 
 LOGGER = logging.getLogger(__name__)
+NEXT_DOCUMENT_TYPE_KEY = "next_document_type"
+
+
+async def order_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user is None or update.message is None:
+        return
+    if not await ensure_access(update, context):
+        return
+    context.user_data[NEXT_DOCUMENT_TYPE_KEY] = DOCUMENT_TYPE_ORDER
+    await update.message.reply_text(
+        "Отправьте скриншот заказа. Я пропущу ингредиенты, описания и UI-шум, "
+        "а в заметку оставлю товары, количество, цену и сумму."
+    )
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -48,6 +69,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     user_id = update.effective_user.id
+    document_type, explicit_document_type = _consume_document_type(update, context)
+    document_genitive = document_genitive_ru(document_type)
+    document_prepositional = document_prepositional_ru(document_type)
     role = access(context).role_for(user_id)
     quota = quotas(context).check(user_id, role)
     if not quota.allowed:
@@ -72,10 +96,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await telegram_file.download_to_drive(custom_path=image_path)
     except OSError:
         LOGGER.exception("Failed to save Telegram photo for user_id=%s", user_id)
-        await update.message.reply_text("Не удалось сохранить изображение чека.")
+        if explicit_document_type:
+            await update.message.reply_text(f"Не удалось сохранить изображение {document_genitive}.")
+        else:
+            await update.message.reply_text("Не удалось сохранить изображение.")
         return
 
-    await update.message.reply_text("Фото получено. Распознаю текст чека...")
+    if explicit_document_type:
+        await update.message.reply_text(f"Фото получено. Распознаю текст {document_genitive}...")
+    else:
+        await update.message.reply_text("Фото получено. Распознаю текст изображения...")
     try:
         _raw_ocr, clean_ocr = await asyncio.to_thread(run_ocr, image_path)
     except GoogleVisionCredentialsError:
@@ -96,8 +126,24 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     if not clean_ocr:
-        await update.message.reply_text("Не удалось распознать текст на чеке. OpenAI не вызывался.")
+        if explicit_document_type:
+            await update.message.reply_text(f"Не удалось распознать текст на {document_prepositional}. OpenAI не вызывался.")
+        else:
+            await update.message.reply_text("Не удалось распознать текст на изображении. OpenAI не вызывался.")
         return
+    if not explicit_document_type:
+        classification = classify_document_type(clean_ocr)
+        document_type = classification.document_type
+        document_genitive = document_genitive_ru(document_type)
+        LOGGER.info(
+            "Detected document type for user_id=%s type=%s confidence=%.2f reason=%s receipt_score=%s order_score=%s",
+            user_id,
+            document_type,
+            classification.confidence,
+            classification.reason,
+            classification.receipt_score,
+            classification.order_score,
+        )
 
     clean_ocr_path = app_settings.obsidian_vault / user_dated_relpath(
         app_settings,
@@ -130,11 +176,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         source_ocr_path=source_ocr_path,
         temporary_base_name=temporary_base_name,
         created_at=created_at,
+        document_type=document_type,
     )
     save_session(session, context)
 
     await update.message.reply_photo(photo=image_path)
-    await update.message.reply_text("OCR готов. Извлекаю поля заметки через OpenAI...")
+    await update.message.reply_text(f"OCR готов. Извлекаю поля {document_genitive} через OpenAI...")
     await process_openai_for_review(session, update.message, context)
 
 
@@ -177,7 +224,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     session = SESSIONS.get(update.effective_user.id)
     if session is None:
-        await update.message.reply_text("Сначала отправьте фото чека.")
+        if normalize_document_type(context.user_data.get(NEXT_DOCUMENT_TYPE_KEY)) == DOCUMENT_TYPE_ORDER:
+            await update.message.reply_text("Отправьте скриншот заказа.")
+        else:
+            await update.message.reply_text("Сначала отправьте фото чека.")
         return
     if session.state == SessionState.WAITING_FOR_CORRECTED_REVIEW:
         if session.parsed_receipt is None:
@@ -198,7 +248,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if session.state == SessionState.WAITING_FOR_RUSSIAN_REVIEW:
         await update.message.reply_text("Используйте кнопки под полями заметки.")
         return
-    await update.message.reply_text("Отправьте новое фото чека.")
+    await update.message.reply_text("Отправьте новое фото чека или используйте /order для скриншота заказа.")
 
 
 async def handle_non_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -208,7 +258,10 @@ async def handle_non_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     if update.message.text:
         return
-    await update.message.reply_text("Пожалуйста, отправьте фото чека.")
+    if normalize_document_type(context.user_data.get(NEXT_DOCUMENT_TYPE_KEY)) == DOCUMENT_TYPE_ORDER:
+        await update.message.reply_text("Пожалуйста, отправьте скриншот заказа.")
+    else:
+        await update.message.reply_text("Пожалуйста, отправьте фото чека.")
 
 
 async def process_openai_for_review(session: ReceiptSession, reply_target, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -219,6 +272,7 @@ async def process_openai_for_review(session: ReceiptSession, reply_target, conte
             session.source_ocr_path.read_text(encoding="utf-8"),
             settings=app_settings,
             correction_store=corrections(context),
+            document_type=session.document_type,
         )
     except OpenAIInvalidJSONError as exc:
         LOGGER.exception("OpenAI returned invalid JSON.")
@@ -279,3 +333,15 @@ def _quota_message(reason: str, daily_used: int, daily_limit: int, monthly_used:
     if reason == "monthly_limit":
         return f"Месячный лимит попыток обработки чеков исчерпан: {monthly_used}/{monthly_limit}."
     return "Лимит попыток обработки чеков исчерпан."
+
+
+def _consume_document_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> tuple[str, bool]:
+    caption = update.message.caption if update.message else ""
+    caption_command = caption.strip().split(maxsplit=1)[0].lower() if caption else ""
+    if caption_command == "/order" or caption_command.startswith("/order@"):
+        context.user_data.pop(NEXT_DOCUMENT_TYPE_KEY, None)
+        return DOCUMENT_TYPE_ORDER, True
+    if NEXT_DOCUMENT_TYPE_KEY in context.user_data:
+        queued = context.user_data.pop(NEXT_DOCUMENT_TYPE_KEY)
+        return normalize_document_type(queued), True
+    return DOCUMENT_TYPE_RECEIPT, False

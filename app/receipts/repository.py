@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.config import Settings
+from app.receipts.document_types import normalize_document_type
 from app.receipts.models import ReceiptRecord
 from app.storage.paths import ensure_parent, next_available_stem, safe_vault_path
 from app.users.paths import user_root_rel
@@ -66,6 +67,7 @@ class ReceiptRepository:
             "owner_user_id": target_user_id,
             "copied_from": source.receipt_id,
             "created_at": datetime.now().isoformat(),
+            "document_type": source.document_type,
             "date": source.date,
             "merchant": source.merchant,
             "amount": source.amount,
@@ -166,6 +168,7 @@ class ReceiptRepository:
             currency=str(manifest.get("currency", "AMD")),
             created_at=str(manifest.get("created_at", "")),
             files=files,
+            document_type=normalize_document_type(manifest.get("document_type", "receipt")),
         )
 
 

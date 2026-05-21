@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from app.obsidian.writer import render_markdown
+from app.receipts.document_types import DOCUMENT_TYPE_ORDER
 
 
 def test_markdown_frontmatter_has_only_receipt_properties() -> None:
@@ -59,3 +60,25 @@ def test_markdown_renders_items_table() -> None:
     )
     assert "| 1 | Пакет большой | 20 | 1 | шт | 20 |" in markdown
     assert "| 1 | Large bag | 20 | 1 | pcs | 20 |" in markdown
+
+
+def test_markdown_renders_order_title_for_order_screenshots() -> None:
+    markdown = render_markdown(
+        parsed={
+            "date": "2026-04-07",
+            "time": "20:41:00",
+            "merchant": "Delivery App",
+            "amount": "5000",
+            "category": "Food Delivery",
+            "summary_ru": "Заказ еды",
+            "items": [],
+        },
+        note_date="2026-04-07",
+        attachment_rel=Path("Attachments/receipts/2026/04/a.jpg"),
+        clean_rel=Path("OCR/2026/04/a.clean.hy.txt"),
+        source_rel=Path("OCR_VERIFIED/2026/04/a.verified.hy.txt"),
+        possible_errors=[],
+        document_type=DOCUMENT_TYPE_ORDER,
+    )
+    assert "# Заказ — Delivery App — 5000 AMD" in markdown
+    assert "## Заказ на русском" in markdown
