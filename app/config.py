@@ -30,6 +30,12 @@ class Settings:
     webhook_listen: str = "0.0.0.0"
     webhook_port: int = 8080
     webhook_secret_token: str = ""
+    database_url: str = "sqlite:///data/app.db"
+    db_busy_timeout_ms: int = 5000
+    app_storage_dir: Path = Path("data/storage")
+    tmp_storage_dir: Path = Path("data/tmp")
+    export_storage_dir: Path = Path("data/exports")
+    debug_storage_dir: Path = Path("data/debug")
 
 
 def load_settings() -> Settings:
@@ -41,7 +47,8 @@ def load_settings() -> Settings:
     if not obsidian_vault.is_dir():
         raise RuntimeError("OBSIDIAN_VAULT must point to a directory.")
 
-    data_dir = Path(_get("DATA_DIR", env_file_values) or PROJECT_ROOT / "data").expanduser()
+    data_dir = _path("DATA_DIR", env_file_values, PROJECT_ROOT / "data")
+    database_url = _get("DATABASE_URL", env_file_values) or _sqlite_url(data_dir / "app.db")
     bot_mode = (_get("BOT_MODE", env_file_values) or "polling").lower()
     if bot_mode not in {"polling", "webhook"}:
         raise RuntimeError("BOT_MODE must be polling or webhook.")
@@ -65,6 +72,12 @@ def load_settings() -> Settings:
         webhook_listen=_get("WEBHOOK_LISTEN", env_file_values) or "0.0.0.0",
         webhook_port=_int("WEBHOOK_PORT", env_file_values, 8080),
         webhook_secret_token=_get("WEBHOOK_SECRET_TOKEN", env_file_values) or "",
+        database_url=database_url,
+        db_busy_timeout_ms=_int("DB_BUSY_TIMEOUT_MS", env_file_values, 5000),
+        app_storage_dir=_path("APP_STORAGE_DIR", env_file_values, data_dir / "storage"),
+        tmp_storage_dir=_path("TMP_STORAGE_DIR", env_file_values, data_dir / "tmp"),
+        export_storage_dir=_path("EXPORT_STORAGE_DIR", env_file_values, data_dir / "exports"),
+        debug_storage_dir=_path("DEBUG_STORAGE_DIR", env_file_values, data_dir / "debug"),
     )
 
 
@@ -104,3 +117,14 @@ def _int_set(name: str, env_file_values: dict[str, str | None]) -> frozenset[int
         except ValueError as exc:
             raise RuntimeError(f"{name} must contain comma-separated integer IDs.") from exc
     return frozenset(result)
+
+
+def _path(name: str, env_file_values: dict[str, str | None], default: Path) -> Path:
+    path = Path(_get(name, env_file_values) or default).expanduser()
+    if not path.is_absolute():
+        return PROJECT_ROOT / path
+    return path
+
+
+def _sqlite_url(path: Path) -> str:
+    return f"sqlite:///{path.as_posix()}"

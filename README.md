@@ -85,6 +85,12 @@ ADMIN_TELEGRAM_USER_IDS=123456789
 ALLOWED_TELEGRAM_USER_IDS=123456789,987654321
 PRIVILEGED_TELEGRAM_USER_IDS=
 DATA_DIR=data
+DATABASE_URL=sqlite:///data/app.db
+DB_BUSY_TIMEOUT_MS=5000
+APP_STORAGE_DIR=data/storage
+TMP_STORAGE_DIR=data/tmp
+EXPORT_STORAGE_DIR=data/exports
+DEBUG_STORAGE_DIR=data/debug
 USER_VAULT_ROOT=Users
 REGULAR_DAILY_RECEIPT_LIMIT=10
 REGULAR_MONTHLY_RECEIPT_LIMIT=100
@@ -96,6 +102,8 @@ WEBHOOK_SECRET_TOKEN=
 ```
 
 `OPENAI_MODEL` можно поменять без изменения кода. По умолчанию используется недорогая современная модель `gpt-5.4-mini`.
+
+SQLite-хранилище создаётся при старте бота. На текущем этапе оно подготавливает DB-first фундамент для следующих PR; существующий пользовательский flow пока остаётся совместимым с файловым MVP.
 
 Секреты можно читать напрямую из env или через `*_FILE`:
 
