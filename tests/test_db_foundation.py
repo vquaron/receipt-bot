@@ -7,7 +7,8 @@ import pytest
 
 from app.config import PROJECT_ROOT, Settings
 from app.db.connection import connect_database, database_path_from_url
-from app.db.migrations import initialize_database
+from app.db import migrations
+from app.db.migrations import Migration, initialize_database
 
 
 def test_initialize_database_creates_schema_and_pragmas(tmp_path: Path) -> None:
@@ -45,7 +46,61 @@ def test_migrations_are_idempotent(tmp_path: Path) -> None:
 
     with connect_database(app_settings) as connection:
         rows = connection.execute("select version, name from schema_migrations").fetchall()
-    assert [(row["version"], row["name"]) for row in rows] == [(1, "initial_storage_schema")]
+    assert [(row["version"], row["name"]) for row in rows] == [
+        (1, "initial_storage_schema"),
+        (2, "access_requests_unique_pending_user"),
+    ]
+
+
+def test_pending_access_request_is_unique_per_user(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    initialize_database(app_settings)
+
+    with connect_database(app_settings) as connection:
+        connection.execute(
+            """
+            insert into access_requests(id, telegram_user_id, status, created_at)
+            values (?, ?, ?, ?)
+            """,
+            ("one", 777, "pending", "now"),
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                insert into access_requests(id, telegram_user_id, status, created_at)
+                values (?, ?, ?, ?)
+                """,
+                ("two", 777, "pending", "now"),
+            )
+        connection.execute(
+            """
+            insert into access_requests(id, telegram_user_id, status, created_at)
+            values (?, ?, ?, ?)
+            """,
+            ("three", 777, "rejected", "now"),
+        )
+
+
+def test_failed_migration_rolls_back_partial_schema(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    app_settings = _settings(tmp_path)
+    bad_migration = Migration(
+        99,
+        "bad_migration",
+        """
+        create table should_be_rolled_back(id integer primary key);
+        insert into missing_table values (1);
+        """,
+    )
+    monkeypatch.setattr(migrations, "MIGRATIONS", (bad_migration,))
+
+    with pytest.raises(sqlite3.Error):
+        initialize_database(app_settings)
+
+    with connect_database(app_settings) as connection:
+        tables = _table_names(connection)
+        rows = connection.execute("select version from schema_migrations").fetchall()
+    assert "should_be_rolled_back" not in tables
+    assert [row["version"] for row in rows] == []
 
 
 def test_document_file_stem_is_unique_per_user_only(tmp_path: Path) -> None:
@@ -88,6 +143,21 @@ def test_database_url_paths_are_project_relative() -> None:
     assert database_path_from_url("sqlite:///:memory:") == ":memory:"
     with pytest.raises(ValueError):
         database_path_from_url("postgresql:///data/app.db")
+
+
+def test_direct_settings_constructor_uses_data_dir_for_default_database_url(tmp_path: Path) -> None:
+    app_settings = Settings(
+        telegram_bot_token="telegram",
+        openai_api_key="openai",
+        obsidian_vault=tmp_path,
+        data_dir=tmp_path / "custom_data",
+        admin_telegram_user_ids=frozenset(),
+        allowed_telegram_user_ids=frozenset(),
+    )
+
+    assert app_settings.database_url == f"sqlite:///{(tmp_path / 'custom_data' / 'app.db').as_posix()}"
+    assert app_settings.app_storage_dir == tmp_path / "custom_data" / "storage"
+    assert app_settings.tmp_storage_dir == tmp_path / "custom_data" / "tmp"
 
 
 def _settings(tmp_path: Path, *, busy_timeout_ms: int = 5000) -> Settings:

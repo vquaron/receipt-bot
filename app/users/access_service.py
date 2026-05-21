@@ -12,7 +12,7 @@ from app.users.repository import UserRepository
 class AccessControl:
     def __init__(self, settings: Settings, repository: UserRepository | None = None) -> None:
         self.settings = settings
-        self.repository = repository or UserRepository(settings.data_dir)
+        self.repository = repository or UserRepository(settings)
         self.repository.migrate_legacy_access(settings.data_dir / "access.json", user_vault_root=settings.user_vault_root)
         self._bootstrap_env_users()
 
@@ -57,12 +57,12 @@ class AccessControl:
         )
         if self.is_allowed(request.user_id) or self.is_pending(request.user_id):
             return request, False
-        self.repository.save_pending_request(request)
-        return request, True
+        created = self.repository.save_pending_request(request)
+        return request, created
 
     def approve(self, user_id: int, *, approved_by: int | None = None, role: UserRole | None = None) -> None:
         now = datetime.now()
-        request = self.repository.pop_pending_request(user_id)
+        request = self.repository.resolve_pending_request(user_id, status="approved", resolved_by=approved_by)
         existing = self.repository.get(user_id)
         resolved_role = role or self._default_role(user_id)
         profile = UserProfile(
@@ -80,7 +80,7 @@ class AccessControl:
         self.repository.save_profile(profile)
 
     def reject(self, user_id: int) -> None:
-        request = self.repository.pop_pending_request(user_id)
+        request = self.repository.resolve_pending_request(user_id, status="rejected")
         if request is None:
             now = datetime.now()
             profile = self.repository.get(user_id)
@@ -90,7 +90,8 @@ class AccessControl:
                 username=profile.username if profile else "",
                 created_at=now,
             )
-        self.repository.save_rejected_request(request)
+        if self.repository.rejected_request(user_id) is None:
+            self.repository.save_rejected_request(request)
         self._set_status(user_id, UserStatus.REJECTED)
 
     def revoke(self, user_id: int) -> bool:

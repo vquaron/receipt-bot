@@ -18,6 +18,15 @@ class Migration:
 
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "initial_storage_schema", INITIAL_SCHEMA_SQL),
+    Migration(
+        2,
+        "access_requests_unique_pending_user",
+        """
+        create unique index if not exists idx_access_requests_unique_pending_user
+        on access_requests(telegram_user_id)
+        where status = 'pending';
+        """,
+    ),
 )
 
 
@@ -33,15 +42,25 @@ def apply_migrations(connection: sqlite3.Connection) -> None:
         if migration.version in applied:
             continue
         applied_at = datetime.now().isoformat()
-        migration_name = migration.name.replace("'", "''")
-        migration_applied_at = applied_at.replace("'", "''")
-        connection.executescript(
-            f"""
-            {migration.sql}
-            insert into schema_migrations(version, name, applied_at)
-            values ({migration.version}, '{migration_name}', '{migration_applied_at}');
-            """
-        )
+        try:
+            connection.executescript(
+                """
+                begin immediate;
+                """
+                + migration.sql
+            )
+            connection.execute(
+                """
+                insert into schema_migrations(version, name, applied_at)
+                values (?, ?, ?)
+                """,
+                (migration.version, migration.name, applied_at),
+            )
+            connection.commit()
+        except sqlite3.Error:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
 
 
 def _ensure_migrations_table(connection: sqlite3.Connection) -> None:

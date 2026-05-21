@@ -37,6 +37,32 @@ class Settings:
     export_storage_dir: Path = Path("data/exports")
     debug_storage_dir: Path = Path("data/debug")
 
+    def __post_init__(self) -> None:
+        data_dir = _absolute_path(self.data_dir)
+        object.__setattr__(self, "data_dir", data_dir)
+        if self.database_url == "sqlite:///data/app.db":
+            object.__setattr__(self, "database_url", _sqlite_url(data_dir / "app.db"))
+        object.__setattr__(
+            self,
+            "app_storage_dir",
+            _storage_path(self.app_storage_dir, Path("data/storage"), data_dir / "storage"),
+        )
+        object.__setattr__(
+            self,
+            "tmp_storage_dir",
+            _storage_path(self.tmp_storage_dir, Path("data/tmp"), data_dir / "tmp"),
+        )
+        object.__setattr__(
+            self,
+            "export_storage_dir",
+            _storage_path(self.export_storage_dir, Path("data/exports"), data_dir / "exports"),
+        )
+        object.__setattr__(
+            self,
+            "debug_storage_dir",
+            _storage_path(self.debug_storage_dir, Path("data/debug"), data_dir / "debug"),
+        )
+
 
 def load_settings() -> Settings:
     env_file_values = dotenv_values(PROJECT_ROOT / ".env")
@@ -121,10 +147,22 @@ def _int_set(name: str, env_file_values: dict[str, str | None]) -> frozenset[int
 
 def _path(name: str, env_file_values: dict[str, str | None], default: Path) -> Path:
     path = Path(_get(name, env_file_values) or default).expanduser()
+    return _absolute_path(path)
+
+
+def _sqlite_url(path: Path) -> str:
+    return f"sqlite:///{path.as_posix()}"
+
+
+def _absolute_path(path: Path) -> Path:
+    path = path.expanduser()
     if not path.is_absolute():
         return PROJECT_ROOT / path
     return path
 
 
-def _sqlite_url(path: Path) -> str:
-    return f"sqlite:///{path.as_posix()}"
+def _storage_path(path: Path, default_value: Path, resolved_default: Path) -> Path:
+    path = path.expanduser()
+    if path == default_value:
+        return resolved_default
+    return _absolute_path(path)
