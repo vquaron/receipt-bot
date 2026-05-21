@@ -13,7 +13,6 @@ class AccessControl:
     def __init__(self, settings: Settings, repository: UserRepository | None = None) -> None:
         self.settings = settings
         self.repository = repository or UserRepository(settings)
-        self.repository.migrate_legacy_access(settings.data_dir / "access.json", user_vault_root=settings.user_vault_root)
         self._bootstrap_env_users()
 
     def is_admin(self, user_id: int) -> bool:

@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 from app.config import Settings
@@ -50,27 +49,16 @@ def test_approve_and_revoke(tmp_path: Path) -> None:
     assert not (tmp_path / "data" / "users" / "access_requests.json").exists()
 
 
-def test_legacy_migration_skips_invalid_user_ids(tmp_path: Path) -> None:
+def test_legacy_access_json_is_not_imported(tmp_path: Path) -> None:
     app_settings = settings(tmp_path)
     app_settings.data_dir.mkdir(parents=True, exist_ok=True)
     (app_settings.data_dir / "access.json").write_text(
-        json.dumps(
-            {
-                "allowed": {"not-a-number": {}, "333": {}},
-                "pending": {"bad": {}, "444": {}},
-                "rejected": {"oops": {}, "555": {}},
-            }
-        ),
+        '{"allowed": {"333": {}}, "pending": {"444": {}}, "rejected": {"555": {}}}',
         encoding="utf-8",
     )
 
     access = AccessControl(app_settings)
 
-    assert access.is_allowed(333)
-    assert access.is_pending(444)
-    assert access.repository.rejected_request(555) is not None
-
-    restarted_access = AccessControl(app_settings)
-    requests = restarted_access.repository.load_requests()
-    assert sorted(requests["pending"]) == ["444"]
-    assert sorted(requests["rejected"]) == ["555"]
+    assert not access.is_allowed(333)
+    assert not access.is_pending(444)
+    assert access.repository.rejected_request(555) is None
