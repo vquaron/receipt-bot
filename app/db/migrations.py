@@ -32,15 +32,16 @@ def apply_migrations(connection: sqlite3.Connection) -> None:
     for migration in MIGRATIONS:
         if migration.version in applied:
             continue
-        connection.executescript(migration.sql)
-        connection.execute(
-            """
+        applied_at = datetime.now().isoformat()
+        migration_name = migration.name.replace("'", "''")
+        migration_applied_at = applied_at.replace("'", "''")
+        connection.executescript(
+            f"""
+            {migration.sql}
             insert into schema_migrations(version, name, applied_at)
-            values (?, ?, ?)
-            """,
-            (migration.version, migration.name, datetime.now().isoformat()),
+            values ({migration.version}, '{migration_name}', '{migration_applied_at}');
+            """
         )
-        connection.commit()
 
 
 def _ensure_migrations_table(connection: sqlite3.Connection) -> None:

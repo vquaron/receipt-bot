@@ -47,7 +47,7 @@ def load_settings() -> Settings:
     if not obsidian_vault.is_dir():
         raise RuntimeError("OBSIDIAN_VAULT must point to a directory.")
 
-    data_dir = Path(_get("DATA_DIR", env_file_values) or PROJECT_ROOT / "data").expanduser()
+    data_dir = _path("DATA_DIR", env_file_values, PROJECT_ROOT / "data")
     database_url = _get("DATABASE_URL", env_file_values) or _sqlite_url(data_dir / "app.db")
     bot_mode = (_get("BOT_MODE", env_file_values) or "polling").lower()
     if bot_mode not in {"polling", "webhook"}:
@@ -120,7 +120,10 @@ def _int_set(name: str, env_file_values: dict[str, str | None]) -> frozenset[int
 
 
 def _path(name: str, env_file_values: dict[str, str | None], default: Path) -> Path:
-    return Path(_get(name, env_file_values) or default).expanduser()
+    path = Path(_get(name, env_file_values) or default).expanduser()
+    if not path.is_absolute():
+        return PROJECT_ROOT / path
+    return path
 
 
 def _sqlite_url(path: Path) -> str:

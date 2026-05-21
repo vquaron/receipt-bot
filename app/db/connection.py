@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from app.config import PROJECT_ROOT, Settings
@@ -10,14 +12,19 @@ SQLITE_MEMORY_URL = "sqlite:///:memory:"
 SQLITE_URL_PREFIX = "sqlite:///"
 
 
-def connect_database(settings: Settings) -> sqlite3.Connection:
+@contextmanager
+def connect_database(settings: Settings) -> Iterator[sqlite3.Connection]:
     database_path = database_path_from_url(settings.database_url)
     if database_path != ":memory:":
         Path(database_path).parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(database_path)
-    connection.row_factory = sqlite3.Row
-    configure_connection(connection, settings.db_busy_timeout_ms)
-    return connection
+    try:
+        connection.row_factory = sqlite3.Row
+        configure_connection(connection, settings.db_busy_timeout_ms)
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def configure_connection(connection: sqlite3.Connection, busy_timeout_ms: int) -> None:
