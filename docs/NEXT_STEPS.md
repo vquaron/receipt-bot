@@ -2,14 +2,6 @@
 
 ## Immediate next steps
 
-- [ ] PR3: move quotas from JSON counters to SQLite `usage_events`.
-  - Context: The schema already has `usage_events`, but runtime quota counting
-    still writes `data/usage/YYYY-MM/<user_id>.json`.
-  - Expected outcome: `QuotaService` records and counts `receipt_attempt`
-    events in SQLite; admins and privileged users keep unlimited behavior; tests
-    cover daily/monthly limits and no-cost denial before OCR/OpenAI.
-  - Depends on: Current SQLite foundation and user roles.
-
 - [ ] PR4: move processing sessions to SQLite `processing_sessions` and move
   temporary files out of the Obsidian vault.
   - Context: Review sessions currently live in `data/sessions`; temporary image
@@ -124,4 +116,3 @@
 - Audit log for access decisions, deletions, exports, and web logins.
 - Health check for DB/export drift: missing files, orphan files, manifest
   mismatch.
-

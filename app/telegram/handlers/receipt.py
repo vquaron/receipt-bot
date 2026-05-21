@@ -43,6 +43,7 @@ from app.telegram.handlers.common import (
     send_text_chunks,
     settings,
 )
+from app.users.quotas import QuotaStorageError
 from app.users.paths import user_dated_relpath
 
 
@@ -73,11 +74,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     document_genitive = document_genitive_ru(document_type)
     document_prepositional = document_prepositional_ru(document_type)
     role = access(context).role_for(user_id)
-    quota = quotas(context).check(user_id, role)
+    try:
+        quota = quotas(context).check_and_record_attempt(user_id, role, document_type=document_type)
+    except QuotaStorageError:
+        LOGGER.exception("Quota check failed for user_id=%s", user_id)
+        await update.message.reply_text("Не удалось проверить лимит обработки. Попробуйте позже.")
+        return
     if not quota.allowed:
         await update.message.reply_text(_quota_message(quota.reason, quota.daily_used, quota.daily_limit, quota.monthly_used, quota.monthly_limit))
         return
-    quotas(context).record(user_id)
 
     app_settings = settings(context)
     created_at = datetime.now()

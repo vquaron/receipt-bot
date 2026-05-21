@@ -129,6 +129,25 @@ source.
 **Review trigger:** Revisit if roles/permissions expand enough to require a more
 formal policy layer.
 
+### 2026-05-22 - Event-based quotas in SQLite
+
+**Status:** active
+**Decision:** Quotas are enforced through SQLite `usage_events` using
+`event_type='receipt_attempt'`. Old JSON quota counters in `data/usage` are not
+imported and are removed safely when quota storage initializes.
+**Context:** Runtime quota logic used JSON counters, while the DB schema already
+had `usage_events` for durable usage tracking.
+**Reason:** Event rows are easier to audit, extend, and query than mutable JSON
+counters. Resetting old counters keeps PR3 simple and explicit.
+**Alternatives considered:** Import legacy JSON counters; keep JSON fallback;
+count only successful receipts. Import/fallback would complicate the MVP;
+success-only counting would not protect OCR/OpenAI cost.
+**Impact:** Telegram photo handling must use an atomic quota check-and-record
+operation before downloading the image. Admin and privileged attempts are
+recorded for audit even when unlimited.
+**Review trigger:** Revisit if users need historical usage migration or if
+future pricing requires separate limits for OCR/OpenAI calls.
+
 ### 2026-05-21 - Atomic per-migration SQLite changes
 
 **Status:** active  
@@ -156,6 +175,15 @@ runtime user data in JSON files under `data/`.
 **Superseded by:** `2026-05-21 - Access requests in SQLite`.  
 **Reason for change:** Access state became important enough for durable
 constraints, future web auth, and multi-user growth.
+
+### 2026-05-22 - JSON counters as primary quota storage
+
+**Status:** superseded
+**Original decision:** Store daily/monthly quota counters in
+`data/usage/YYYY-MM/<user_id>.json`.
+**Superseded by:** `2026-05-22 - Event-based quotas in SQLite`.
+**Reason for change:** Quota usage needs durable event history, auditing, and a
+path toward future analytics.
 
 ## Uncertain / pending decisions
 
@@ -212,4 +240,3 @@ mobile use case.
 **Impact:**  
 **Review trigger:**  
 -->
-
