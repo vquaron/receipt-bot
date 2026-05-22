@@ -2,13 +2,14 @@
 
 ## Immediate next steps
 
-- [ ] PR6: implement file retention and image policy.
-  - Context: Storage cost matters. Current files preserve original image, clean
-    OCR, source OCR, and Obsidian export artifacts for new receipts.
-  - Expected outcome: define `stored_image` vs `original_image`; strip EXIF from
-    optimized stored images if enabled; record sha256/size/mime; keep originals
-    according to explicit settings; stop keeping no-value temp files.
-  - Depends on: DB-first `document_files`.
+- [ ] PR7: implement file retention and exports/debug cleanup.
+  - Context: Canonical images now have generic local/S3 storage references and
+    new documents create both `original_image` and `stored_image`. `data/exports`
+    and debug files can still grow.
+  - Expected outcome: clean old export ZIPs and debug artifacts safely, move new
+    OpenAI debug output out of Obsidian vault, and define local cache retention
+    for materialized S3 objects.
+  - Depends on: generic `document_files` storage refs.
 
 - [ ] Keep docs context updated after every substantial PR.
   - Context: `docs/` now acts as persistent project memory.
@@ -18,15 +19,12 @@
 
 ## Open questions
 
-- [ ] What is the final image retention default?
+- [x] What is the final image retention default?
   - Context: Original images are valuable for audit and user trust, but storage
     cost grows with users.
-  - Options: Keep original always; keep optimized `stored_image` only; keep both
-    by role/user setting; configurable retention.
-  - Current leaning: Preserve originals until an explicit DB-backed image policy
-    PR changes this safely.
-  - Needed to decide: Measure real average image size and compare OCR/debug value
-    against storage cost.
+  - Decision: Keep both raw `original_image` and optimized `stored_image` for
+    new DB documents. Production may store both in private S3/B2; local/dev uses
+    `APP_STORAGE_DIR`.
 
 - [ ] Should `OCR_VERIFIED` continue as a permanent file?
   - Context: Manual review now happens on Russian fields, not Armenian OCR, so

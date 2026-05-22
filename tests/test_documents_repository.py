@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import zipfile
 from datetime import datetime
@@ -19,12 +20,17 @@ from app.repositories.documents import (
     FILE_KIND_OBSIDIAN_NOTE,
     FILE_KIND_ORIGINAL_IMAGE,
     FILE_KIND_SOURCE_OCR,
+    FILE_KIND_STORED_IMAGE,
+    DOCUMENT_STATUS_STORAGE_FAILED,
     PARSED_SCHEMA_VERSION,
     PARSER_VERSION,
     PROMPT_VERSION,
     DocumentRepository,
+    DocumentStorageError,
 )
 from app.review.models import ReceiptSession, SessionState
+from app.storage.object_store import StoredObject
+from app.storage.images import create_stored_image
 from app.storage.sessions import SessionStore
 from app.telegram.handlers import receipt as receipt_handler
 
@@ -37,12 +43,13 @@ def test_confirmed_document_creates_db_rows_files_and_obsidian_export(tmp_path: 
     assert result.record.source == "db"
     assert result.record.receipt_id == "2026-05-20_zovq_supermarket_1234.5AMD"
     assert result.record.document_id
-    assert not session.image_path.exists()
-    assert not session.clean_ocr_path.exists()
-    assert not session.source_ocr_path.exists()
+    assert session.image_path.exists()
+    assert session.clean_ocr_path.exists()
+    assert session.source_ocr_path.exists()
 
     document_root = app_settings.app_storage_dir / "documents" / result.record.document_id
     assert (document_root / "original.jpg").read_text(encoding="utf-8") == "image"
+    assert (document_root / "stored.jpg").read_text(encoding="utf-8") == "image"
     assert (document_root / "clean.hy.txt").read_text(encoding="utf-8") == "clean ocr"
     assert (document_root / "source.hy.txt").read_text(encoding="utf-8") == "source ocr"
 
@@ -56,7 +63,10 @@ def test_confirmed_document_creates_db_rows_files_and_obsidian_export(tmp_path: 
     with connect_database(app_settings) as connection:
         document = connection.execute("select * from documents where id = ?", (result.record.document_id,)).fetchone()
         items = connection.execute("select * from document_items where document_id = ?", (result.record.document_id,)).fetchall()
-        files = connection.execute("select kind, path, size_bytes, sha256 from document_files where document_id = ?", (result.record.document_id,)).fetchall()
+        files = connection.execute(
+            "select kind, path, storage_backend, storage_key, bucket, is_canonical, size_bytes, sha256 from document_files where document_id = ?",
+            (result.record.document_id,),
+        ).fetchall()
 
     assert document["status"] == "confirmed"
     assert document["owner_telegram_user_id"] == 222
@@ -73,12 +83,15 @@ def test_confirmed_document_creates_db_rows_files_and_obsidian_export(tmp_path: 
     assert [(item["position"], item["name_ru"], item["possible_error"]) for item in items] == [(1, "Пакет", None)]
     assert {file["kind"] for file in files} == {
         FILE_KIND_ORIGINAL_IMAGE,
+        FILE_KIND_STORED_IMAGE,
         FILE_KIND_CLEAN_OCR,
         FILE_KIND_SOURCE_OCR,
         FILE_KIND_OBSIDIAN_NOTE,
         FILE_KIND_OBSIDIAN_ATTACHMENT,
     }
     assert all(file["size_bytes"] > 0 and file["sha256"] for file in files)
+    assert {file["storage_backend"] for file in files if file["is_canonical"]} == {"local"}
+    assert all(file["storage_key"] == file["path"] for file in files)
 
 
 def test_file_stem_suffixes_per_user_and_can_repeat_across_users(tmp_path: Path) -> None:
@@ -264,6 +277,7 @@ def test_export_user_receipts_includes_legacy_and_db_canonical_files(tmp_path: P
         names = set(archive.namelist())
     assert "Receipts/2026/05/" + legacy_artifact.file_name in names
     assert f"Canonical/{db_created.record.receipt_id}/original.jpg" in names
+    assert f"Canonical/{db_created.record.receipt_id}/stored.jpg" in names
     assert f"Canonical/{db_created.record.receipt_id}/clean.hy.txt" in names
     assert f"Canonical/{db_created.record.receipt_id}/source.hy.txt" in names
 
@@ -282,7 +296,107 @@ def test_export_user_receipts_includes_canonical_when_obsidian_export_missing(tm
     with zipfile.ZipFile(archive_path) as archive:
         names = set(archive.namelist())
     assert f"Canonical/{created.record.receipt_id}/original.jpg" in names
+    assert f"Canonical/{created.record.receipt_id}/stored.jpg" in names
     assert not any(name.startswith("Receipts/") for name in names)
+
+
+def test_s3_image_storage_creates_storage_refs_and_materializes(tmp_path: Path, monkeypatch) -> None:
+    app_settings = _settings(
+        tmp_path,
+        storage_image_backend="s3",
+        s3_bucket_name="receipts",
+        s3_endpoint_url="https://s3.example.test",
+        s3_access_key_id="key-id",
+        s3_secret_access_key="secret",
+    )
+    fake_store = _FakeImageStore(bucket="receipts")
+    monkeypatch.setattr("app.repositories.documents.image_storage", lambda settings: fake_store)
+
+    created = DocumentRepository(app_settings).create_confirmed_from_session(_session(app_settings, user_id=222), _parsed_receipt())
+    image_files = {file.kind: file for file in created.record.file_records if file.kind in {FILE_KIND_ORIGINAL_IMAGE, FILE_KIND_STORED_IMAGE}}
+
+    assert image_files[FILE_KIND_ORIGINAL_IMAGE].storage_backend == "s3"
+    assert image_files[FILE_KIND_ORIGINAL_IMAGE].bucket == "receipts"
+    assert image_files[FILE_KIND_ORIGINAL_IMAGE].storage_key.startswith("receipt-bot/documents/")
+    assert image_files[FILE_KIND_STORED_IMAGE].storage_key.endswith("/stored.jpg")
+    materialized = ReceiptRepository(app_settings).materialize_file(
+        image_files[FILE_KIND_STORED_IMAGE],
+        app_settings.tmp_storage_dir / "materialized-test",
+    )
+    assert materialized.read_bytes() == b"image"
+
+
+def test_s3_storage_failure_marks_document_failed_and_keeps_temp(tmp_path: Path, monkeypatch) -> None:
+    app_settings = _settings(
+        tmp_path,
+        storage_image_backend="s3",
+        s3_bucket_name="receipts",
+        s3_endpoint_url="https://s3.example.test",
+        s3_access_key_id="key-id",
+        s3_secret_access_key="secret",
+    )
+    fake_store = _FailingImageStore(bucket="receipts")
+    monkeypatch.setattr("app.repositories.documents.image_storage", lambda settings: fake_store)
+    session = _session(app_settings, user_id=222)
+
+    with pytest.raises(DocumentStorageError):
+        DocumentRepository(app_settings).create_confirmed_from_session(session, _parsed_receipt())
+
+    assert session.image_path.exists()
+    with connect_database(app_settings) as connection:
+        row = connection.execute("select status from documents").fetchone()
+    assert row["status"] == DOCUMENT_STATUS_STORAGE_FAILED
+
+
+def test_s3_copy_export_and_delete_use_object_storage(tmp_path: Path, monkeypatch) -> None:
+    app_settings = _settings(
+        tmp_path,
+        storage_image_backend="s3",
+        s3_bucket_name="receipts",
+        s3_endpoint_url="https://s3.example.test",
+        s3_access_key_id="key-id",
+        s3_secret_access_key="secret",
+    )
+    fake_store = _FakeImageStore(bucket="receipts")
+    monkeypatch.setattr("app.repositories.documents.image_storage", lambda settings: fake_store)
+    source = DocumentRepository(app_settings).create_confirmed_from_session(_session(app_settings, user_id=222), _parsed_receipt())
+    repository = ReceiptRepository(app_settings)
+
+    copied = repository.copy_receipt_to_user(source.record.document_id, 333)
+    copied_original = next(file for file in copied.file_records if file.kind == FILE_KIND_ORIGINAL_IMAGE)
+    source_original = next(file for file in source.record.file_records if file.kind == FILE_KIND_ORIGINAL_IMAGE)
+    assert copied_original.storage_key != source_original.storage_key
+    assert copied_original.storage_key in fake_store.objects
+
+    archive_path = repository.export_user_receipts(333)
+    with zipfile.ZipFile(archive_path) as archive:
+        names = set(archive.namelist())
+    assert f"Canonical/{copied.receipt_id}/original.jpg" in names
+    assert f"Canonical/{copied.receipt_id}/stored.jpg" in names
+
+    repository.delete_receipt(source.record.document_id, owner_user_id=111, allow_all_users=True)
+    assert source_original.storage_key in fake_store.deleted
+
+
+def test_stored_image_is_optimized_and_exif_stripped(tmp_path: Path) -> None:
+    Image = pytest.importorskip("PIL.Image")
+    app_settings = _settings(
+        tmp_path,
+        storage_stored_image_max_edge_px=100,
+        storage_stored_image_jpeg_quality=80,
+    )
+    source = tmp_path / "source.jpg"
+    target = tmp_path / "stored.jpg"
+    image = Image.new("RGB", (400, 200), color="white")
+    exif = Image.Exif()
+    exif[271] = "Camera"
+    image.save(source, format="JPEG", exif=exif)
+
+    create_stored_image(source, target, app_settings)
+
+    with Image.open(target) as stored:
+        assert max(stored.size) <= 100
+        assert not stored.getexif()
 
 
 def test_export_receipt_note_ignores_non_list_possible_errors(tmp_path: Path) -> None:
@@ -408,14 +522,18 @@ class _ReplyTarget:
         self.messages.append(text)
 
 
-def _settings(tmp_path: Path) -> Settings:
+def _settings(tmp_path: Path, **overrides) -> Settings:
+    values = {
+        "telegram_bot_token": "token",
+        "openai_api_key": "key",
+        "obsidian_vault": tmp_path,
+        "data_dir": tmp_path / "data",
+        "admin_telegram_user_ids": frozenset(),
+        "allowed_telegram_user_ids": frozenset({222, 333}),
+    }
+    values.update(overrides)
     return Settings(
-        telegram_bot_token="token",
-        openai_api_key="key",
-        obsidian_vault=tmp_path,
-        data_dir=tmp_path / "data",
-        admin_telegram_user_ids=frozenset(),
-        allowed_telegram_user_ids=frozenset({222, 333}),
+        **values,
     )
 
 
@@ -483,3 +601,51 @@ def _parsed_receipt(*, merchant: str = "Zovq Supermarket") -> dict[str, object]:
         ],
         "possible_errors": ["amount: проверить сумму"],
     }
+
+
+class _FakeImageStore:
+    backend = "s3"
+
+    def __init__(self, *, bucket: str) -> None:
+        self.bucket = bucket
+        self.objects: dict[str, bytes] = {}
+        self.deleted: list[str] = []
+
+    def put_file(self, source: Path, key: str, *, content_type: str = "") -> StoredObject:
+        content = source.read_bytes()
+        self.objects[key] = content
+        return StoredObject(
+            backend=self.backend,
+            key=key,
+            bucket=self.bucket,
+            mime_type=content_type or "application/octet-stream",
+            size_bytes=len(content),
+            sha256=hashlib.sha256(content).hexdigest(),
+            etag=f"etag-{len(self.objects)}",
+        )
+
+    def download_to(self, key: str, target: Path) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(self.objects[key])
+
+    def copy(self, source_key: str, target_key: str, *, content_type: str = "") -> StoredObject:
+        self.objects[target_key] = self.objects[source_key]
+        return StoredObject(
+            backend=self.backend,
+            key=target_key,
+            bucket=self.bucket,
+            mime_type=content_type or "application/octet-stream",
+            size_bytes=len(self.objects[target_key]),
+            sha256=hashlib.sha256(self.objects[target_key]).hexdigest(),
+            etag=f"etag-{len(self.objects)}",
+        )
+
+    def delete_all_versions(self, key: str) -> bool:
+        self.deleted.append(key)
+        self.objects.pop(key, None)
+        return True
+
+
+class _FailingImageStore(_FakeImageStore):
+    def put_file(self, source: Path, key: str, *, content_type: str = "") -> StoredObject:
+        raise OSError("upload failed")

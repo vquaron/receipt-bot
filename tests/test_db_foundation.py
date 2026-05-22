@@ -49,6 +49,7 @@ def test_migrations_are_idempotent(tmp_path: Path) -> None:
     assert [(row["version"], row["name"]) for row in rows] == [
         (1, "initial_storage_schema"),
         (2, "access_requests_unique_pending_user"),
+        (3, "document_file_storage_refs"),
     ]
 
 

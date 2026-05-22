@@ -27,6 +27,33 @@ MIGRATIONS: tuple[Migration, ...] = (
         where status = 'pending';
         """,
     ),
+    Migration(
+        3,
+        "document_file_storage_refs",
+        """
+        alter table document_files add column storage_backend text not null default '';
+        alter table document_files add column storage_key text;
+        alter table document_files add column bucket text;
+        alter table document_files add column is_canonical integer not null default 0;
+        alter table document_files add column etag text;
+
+        update document_files
+        set storage_backend = case
+                when kind in ('original_image', 'clean_ocr', 'source_ocr') then 'local'
+                when kind in ('obsidian_note', 'obsidian_attachment') then 'obsidian'
+                else 'local'
+            end,
+            storage_key = path,
+            is_canonical = case
+                when kind in ('original_image', 'clean_ocr', 'source_ocr') then 1
+                else 0
+            end
+        where storage_backend = '';
+
+        create index if not exists idx_document_files_storage
+        on document_files(storage_backend, bucket, storage_key);
+        """,
+    ),
 )
 
 

@@ -99,28 +99,53 @@ Legacy `data/sessions/*.json` is not imported.
 **Review trigger:** Revisit if the project later adds resumable background
 processing or multi-session review UX.
 
-### 2026-05-22 - Canonical document files in app storage
+### 2026-05-22 - Canonical document files outside Obsidian
 
 **Status:** active
-**Decision:** For newly confirmed documents, canonical receipt/order image and
-OCR files live under `APP_STORAGE_DIR/documents/<document_id>/` and are recorded
-in SQLite `document_files`; Obsidian files are export artifacts.
+**Decision:** For newly confirmed documents, canonical receipt/order files are
+recorded in SQLite `document_files` and live outside the Obsidian vault.
+Canonical OCR files currently live under `APP_STORAGE_DIR/documents/<document_id>/`;
+canonical images use the configured local or S3-compatible image backend.
+Obsidian files are export artifacts.
 **Context:** DB-first document persistence needs stable document ids and
 queryable file metadata without treating the Obsidian vault as primary storage.
-**Reason:** App storage keeps canonical private artifacts under the application's
-controlled storage tree, while Obsidian can remain a readable export that can be
-regenerated or omitted later.
+**Reason:** Application-controlled storage keeps canonical private artifacts
+outside the human-readable export tree, while Obsidian can remain a readable
+export that can be regenerated or omitted later.
 **Alternatives considered:** Keep moving canonical files directly into the vault;
 store only paths without hashes/metadata; move all exports out of Obsidian.
 Keeping canonical files in the vault would preserve the old source-of-truth
 ambiguity; path-only records are weaker for audit; dropping Obsidian export is
 not desired for the MVP.
-**Impact:** New confirm flows move temp files into app storage, record
-`original_image`, `clean_ocr`, and `source_ocr` file rows, and create Obsidian
-note/image rows only as export files. New manifest JSON files are not created.
+**Impact:** New confirm flows record `original_image`, `stored_image`,
+`clean_ocr`, and `source_ocr` file rows, and create Obsidian note/image rows
+only as export files. New manifest JSON files are not created.
 **Review trigger:** Revisit in the file retention/image policy PR if optimized
 images, EXIF stripping, or original-image retention settings change the storage
 contract.
+
+### 2026-05-22 - Generic storage refs for canonical images
+
+**Status:** active
+**Decision:** `document_files` records use generic storage references
+(`storage_backend`, `storage_key`, `bucket`, checksum metadata, and canonical
+flag) for new document files. Canonical receipt images may live in local storage
+for development or private S3-compatible storage such as Backblaze B2 in
+production.
+**Context:** Receipt images are large immutable binaries and fit object storage
+well, while SQLite should remain the source of truth for ownership, metadata,
+and file references.
+**Reason:** This keeps DB-first architecture intact without treating S3 as a
+mounted filesystem or making public URLs canonical application state.
+**Alternatives considered:** Keep `data/storage` as the only canonical image
+location; mount S3 via rclone/FUSE; store public URLs in SQLite. Local-only
+storage does not scale as well; mounted object storage has weak filesystem
+semantics; public URLs are brittle and less private.
+**Impact:** New image flows use a storage abstraction. `original_image` and
+`stored_image` can be stored with `storage_backend='s3'`; OCR files remain local
+for now; Obsidian images remain export artifacts.
+**Review trigger:** Revisit if OCR artifacts also move to object storage or if
+the project needs multi-provider storage policies per user/role.
 
 ### 2026-05-22 - Soft-delete DB documents after file deletion
 

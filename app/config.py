@@ -37,10 +37,22 @@ class Settings:
     export_storage_dir: Path = Path("data/exports")
     debug_storage_dir: Path = Path("data/debug")
     storage_retention_tmp_hours: int = 24
+    storage_image_backend: str = "local"
+    s3_bucket_name: str = ""
+    s3_endpoint_url: str = ""
+    s3_access_key_id: str = ""
+    s3_secret_access_key: str = ""
+    s3_key_prefix: str = "receipt-bot"
+    storage_stored_image_max_edge_px: int = 2000
+    storage_stored_image_jpeg_quality: int = 85
 
     def __post_init__(self) -> None:
         data_dir = _absolute_path(self.data_dir)
         object.__setattr__(self, "data_dir", data_dir)
+        image_backend = self.storage_image_backend.lower().strip()
+        if image_backend not in {"local", "s3"}:
+            raise RuntimeError("STORAGE_IMAGE_BACKEND must be local or s3.")
+        object.__setattr__(self, "storage_image_backend", image_backend)
         if self.database_url == "sqlite:///data/app.db":
             object.__setattr__(self, "database_url", _sqlite_url(data_dir / "app.db"))
         object.__setattr__(
@@ -106,6 +118,14 @@ def load_settings() -> Settings:
         export_storage_dir=_path("EXPORT_STORAGE_DIR", env_file_values, data_dir / "exports"),
         debug_storage_dir=_path("DEBUG_STORAGE_DIR", env_file_values, data_dir / "debug"),
         storage_retention_tmp_hours=_int("STORAGE_RETENTION_TMP_HOURS", env_file_values, 24),
+        storage_image_backend=_get("STORAGE_IMAGE_BACKEND", env_file_values) or "local",
+        s3_bucket_name=_get("S3_BUCKET_NAME", env_file_values) or "",
+        s3_endpoint_url=_get("S3_ENDPOINT_URL", env_file_values) or "",
+        s3_access_key_id=_get("S3_ACCESS_KEY_ID", env_file_values) or "",
+        s3_secret_access_key=_get("S3_SECRET_ACCESS_KEY", env_file_values) or "",
+        s3_key_prefix=_get("S3_KEY_PREFIX", env_file_values) or "receipt-bot",
+        storage_stored_image_max_edge_px=_int("STORAGE_STORED_IMAGE_MAX_EDGE_PX", env_file_values, 2000),
+        storage_stored_image_jpeg_quality=_int("STORAGE_STORED_IMAGE_JPEG_QUALITY", env_file_values, 85),
     )
 
 

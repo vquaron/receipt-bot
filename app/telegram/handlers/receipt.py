@@ -24,6 +24,7 @@ from app.receipts.document_types import (
     document_prepositional_ru,
     normalize_document_type,
 )
+from app.repositories.documents import DocumentStorageError
 from app.review.models import ReceiptSession, SessionState, review_keyboard
 from app.review.receipt_review import (
     ReviewPayloadError,
@@ -345,6 +346,10 @@ async def create_note_from_review(session: ReceiptSession, reply_target, context
         return
     try:
         result = await asyncio.to_thread(receipts(context).documents.create_confirmed_from_session, session, session.parsed_receipt)
+    except DocumentStorageError:
+        LOGGER.exception("Document file storage failed; keeping review session active user_id=%s", session.user_id)
+        await reply_target.reply_text("Не удалось сохранить файлы документа. Попробуйте подтвердить ещё раз позже.")
+        return
     except Exception:
         LOGGER.exception("Unexpected DB-first document finalization failure.")
         delete_session(session.user_id, context, final_state=SessionState.FAILED)
