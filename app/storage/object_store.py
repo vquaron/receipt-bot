@@ -25,6 +25,17 @@ class StoredObject:
     etag: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class ObjectHead:
+    backend: str
+    key: str
+    bucket: str
+    mime_type: str
+    size_bytes: int
+    sha256: str = ""
+    etag: str = ""
+
+
 class LocalStorage:
     backend = "local"
 
@@ -44,6 +55,20 @@ class LocalStorage:
             raise ObjectStorageError(f"Local object is missing: {key}")
         ensure_parent(target)
         shutil.copy2(source, target)
+
+    def head(self, key: str) -> ObjectHead:
+        path = self._path(key)
+        if not path.exists() or not path.is_file():
+            raise ObjectStorageError(f"Local object is missing: {key}")
+        metadata = _file_metadata(path)
+        return ObjectHead(
+            backend=self.backend,
+            bucket="",
+            key=key,
+            mime_type=metadata.mime_type,
+            size_bytes=metadata.size_bytes,
+            sha256=metadata.sha256,
+        )
 
     def copy(self, source_key: str, target_key: str, *, content_type: str = "") -> StoredObject:
         source = self._path(source_key)
@@ -113,6 +138,19 @@ class S3Storage:
     def download_to(self, key: str, target: Path) -> None:
         ensure_parent(target)
         self.client.download_file(self.bucket, key, str(target))
+
+    def head(self, key: str) -> ObjectHead:
+        head = self.client.head_object(Bucket=self.bucket, Key=key)
+        metadata = head.get("Metadata") or {}
+        return ObjectHead(
+            backend=self.backend,
+            bucket=self.bucket,
+            key=key,
+            mime_type=str(head.get("ContentType") or ""),
+            size_bytes=int(head.get("ContentLength") or 0),
+            sha256=str(metadata.get("sha256") or ""),
+            etag=str(head.get("ETag") or "").strip('"'),
+        )
 
     def copy(self, source_key: str, target_key: str, *, content_type: str = "") -> StoredObject:
         self.client.copy_object(

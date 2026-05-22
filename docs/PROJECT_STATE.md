@@ -103,7 +103,8 @@ Telegram photo or /order caption
   receipt listing helpers.
 - `app/obsidian/` - Markdown writer and manifest-based deletion fallback.
 - `app/storage/` - path safety helpers, normalization, session temp storage,
-  runtime retention cleanup, and correction store.
+  runtime retention cleanup, read-only storage health checks, and correction
+  store.
 - `app/storage/sessions.py` - SQLite-backed processing session store and temp
   cleanup for Telegram review state.
 
@@ -160,9 +161,9 @@ Target storage direction:
   main data source.
 - Original receipt images must be preserved unless a later explicit decision
   changes the file retention policy.
-- Runtime cleanup removes old export ZIPs, debug artifacts, and materialized
-  temp/cache files according to retention settings; it does not delete canonical
-  document files.
+- Runtime cleanup removes only pattern-matched old export ZIPs, OpenAI debug
+  artifacts, and materialized temp/cache files according to retention settings;
+  it refuses unsafe cleanup roots and does not delete canonical document files.
 - Processing stages are valuable: keep enough state to audit OCR, LLM parsing,
   review payloads, user corrections, and export status.
 
@@ -230,6 +231,9 @@ Current documents:
   under `Canonical/<receipt_id>/` in the ZIP archive.
 - OpenAI invalid-JSON debug output is stored under `DEBUG_STORAGE_DIR`, not in
   the Obsidian vault.
+- `/storage_health` is an admin-only read-only Telegram command that reports
+  storage issues from SQLite `documents` / `document_files`, local/vault files,
+  and S3 object metadata without repairing or deleting canonical data.
 
 Future web authorization:
 
@@ -304,6 +308,8 @@ Current tests cover:
 - generic local/S3 image storage references for canonical images;
 - runtime retention cleanup for exports, debug artifacts, and materialized temp
   files;
+- storage health checks for path safety, missing files, checksum drift,
+  storage status, S3 metadata, and app-storage orphans;
 - correction rules;
 - order document parsing/review behavior;
 - user-scoped receipt listing.

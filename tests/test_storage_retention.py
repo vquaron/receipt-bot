@@ -4,10 +4,12 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from app.config import Settings
 from app.obsidian.writer import write_openai_debug_file
 from app.review.models import ReceiptSession
-from app.storage.retention import cleanup_runtime_storage
+from app.storage.retention import RetentionSafetyError, cleanup_runtime_storage
 
 
 def test_runtime_cleanup_removes_old_exports_debug_and_materialized_tmp(tmp_path: Path) -> None:
@@ -19,20 +21,24 @@ def test_runtime_cleanup_removes_old_exports_debug_and_materialized_tmp(tmp_path
         storage_retention_debug_days=14,
     )
     old_export = app_settings.export_storage_dir / "222" / "old.zip"
+    old_named_export = app_settings.export_storage_dir / "222" / "receipts_20260520_120000.zip"
     recent_export = app_settings.export_storage_dir / "222" / "recent.zip"
-    old_debug = app_settings.debug_storage_dir / "openai" / "222" / "old.raw.txt"
+    old_debug = app_settings.debug_storage_dir / "openai" / "222" / "2026" / "05" / "old.openai.raw.txt"
+    old_unrelated_debug = app_settings.debug_storage_dir / "openai" / "222" / "old.raw.txt"
     old_materialized = app_settings.tmp_storage_dir / "materialized" / "doc" / "stored.jpg"
     old_tmp_export = app_settings.tmp_storage_dir / "exports" / "job" / "file.jpg"
     old_telegram_tmp = app_settings.tmp_storage_dir / "telegram" / "222" / "receipt" / "stored.jpg"
     old_processing = app_settings.tmp_storage_dir / "processing" / "session" / "original.jpg"
 
-    for path in (old_export, recent_export, old_debug, old_materialized, old_tmp_export, old_telegram_tmp, old_processing):
+    for path in (old_export, old_named_export, recent_export, old_debug, old_unrelated_debug, old_materialized, old_tmp_export, old_telegram_tmp, old_processing):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("x", encoding="utf-8")
 
     _touch(old_export, now - timedelta(days=31))
+    _touch(old_named_export, now - timedelta(days=31))
     _touch(recent_export, now - timedelta(days=1))
     _touch(old_debug, now - timedelta(days=15))
+    _touch(old_unrelated_debug, now - timedelta(days=15))
     _touch(old_materialized, now - timedelta(hours=25))
     _touch(old_tmp_export, now - timedelta(hours=25))
     _touch(old_telegram_tmp, now - timedelta(hours=25))
@@ -41,9 +47,11 @@ def test_runtime_cleanup_removes_old_exports_debug_and_materialized_tmp(tmp_path
     result = cleanup_runtime_storage(app_settings, now=now)
 
     assert result.deleted_files == 5
-    assert not old_export.exists()
+    assert old_export.exists()
+    assert not old_named_export.exists()
     assert recent_export.exists()
     assert not old_debug.exists()
+    assert old_unrelated_debug.exists()
     assert not old_materialized.exists()
     assert not old_tmp_export.exists()
     assert not old_telegram_tmp.exists()
@@ -65,6 +73,30 @@ def test_runtime_cleanup_unlinks_old_symlink_without_removing_target(tmp_path: P
     assert result.deleted_files == 1
     assert not link.exists()
     assert target.read_text(encoding="utf-8") == "keep"
+
+
+def test_runtime_cleanup_refuses_protected_roots_without_deleting(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path, export_storage_dir=tmp_path / "data")
+    db_file = app_settings.data_dir / "app.db"
+    db_file.parent.mkdir(parents=True, exist_ok=True)
+    db_file.write_text("db", encoding="utf-8")
+
+    with pytest.raises(RetentionSafetyError):
+        cleanup_runtime_storage(app_settings, now=datetime(2026, 5, 22, 12, 0, 0))
+
+    assert db_file.read_text(encoding="utf-8") == "db"
+
+
+def test_runtime_cleanup_refuses_canonical_storage_descendants(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path, debug_storage_dir=tmp_path / "data" / "storage" / "debug")
+    canonical_file = app_settings.app_storage_dir / "documents" / "doc" / "original.jpg"
+    canonical_file.parent.mkdir(parents=True, exist_ok=True)
+    canonical_file.write_text("image", encoding="utf-8")
+
+    with pytest.raises(RetentionSafetyError):
+        cleanup_runtime_storage(app_settings, now=datetime(2026, 5, 22, 12, 0, 0))
+
+    assert canonical_file.read_text(encoding="utf-8") == "image"
 
 
 def test_openai_debug_file_uses_debug_storage_not_obsidian_vault(tmp_path: Path) -> None:
