@@ -309,10 +309,19 @@ class DocumentRepository:
         )
         document_root = self.settings.app_storage_dir / "documents" / new_document_id
         canonical_files = [file for file in files if file.storage == "app"]
-        copied: list[tuple[Path, Path]] = []
+        copied: list[tuple[ReceiptFileRecord, Path]] = []
         now = datetime.now()
 
         try:
+            for file in canonical_files:
+                source_path = self.file_path(file)
+                if not source_path.exists() or not source_path.is_file():
+                    raise DocumentStorageError(f"Source canonical file is missing: {file.path.as_posix()}")
+                target_path = document_root / file.path.name
+                ensure_parent(target_path)
+                shutil.copy2(source_path, target_path)
+                copied.append((file, target_path))
+
             with connect_database(self.settings) as connection:
                 connection.execute("begin immediate")
                 _insert_document(
@@ -336,14 +345,7 @@ class DocumentRepository:
                     item_rows=item_rows,
                     created_at=now,
                 )
-                for file in canonical_files:
-                    source_path = self.file_path(file)
-                    if not source_path.exists() or not source_path.is_file():
-                        raise DocumentStorageError(f"Source canonical file is missing: {file.path.as_posix()}")
-                    target_path = document_root / file.path.name
-                    ensure_parent(target_path)
-                    shutil.copy2(source_path, target_path)
-                    copied.append((source_path, target_path))
+                for file, target_path in copied:
                     _insert_file(
                         connection,
                         document_id=new_document_id,
@@ -353,7 +355,7 @@ class DocumentRepository:
                         created_at=now,
                     )
         except Exception:
-            for _source, target in reversed(copied):
+            for _file, target in reversed(copied):
                 if target.exists():
                     target.unlink()
             raise
@@ -413,7 +415,9 @@ class DocumentRepository:
             try:
                 target = self.file_path(file)
             except ValueError as exc:
-                raise DocumentStorageError("Refusing to use path outside configured storage roots.") from exc
+                raise DocumentStorageError(
+                    f"Refusing to use path outside configured storage roots: {file.kind} {file.path.as_posix()}"
+                ) from exc
             if target.exists() and not target.is_file():
                 raise DocumentStorageError(f"Refusing to delete non-file path: {file.path.as_posix()}")
             targets.append(target)

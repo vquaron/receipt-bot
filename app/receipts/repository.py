@@ -96,12 +96,16 @@ class ReceiptRepository:
             )
         except LegacyReceiptDeleteError as exc:
             raise ReceiptDeleteError(str(exc)) from exc
+        try:
+            note_path = legacy.note_path.relative_to(self.settings.obsidian_vault)
+        except ValueError as exc:
+            raise ReceiptDeleteError("Deleted legacy note is outside the vault.") from exc
         return ReceiptDeleteResult(
             receipt_id=legacy.note_path.stem,
             document_id="",
             deleted=legacy.deleted,
             missing=legacy.missing,
-            note_path=legacy.note_path,
+            note_path=note_path,
             source="legacy",
         )
 

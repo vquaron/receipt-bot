@@ -163,13 +163,25 @@ def test_delete_db_document_rejects_unsafe_path_before_deleting(tmp_path: Path) 
             ("../escape.jpg", created.record.document_id, FILE_KIND_ORIGINAL_IMAGE),
         )
 
-    with pytest.raises(ReceiptDeleteError):
+    with pytest.raises(ReceiptDeleteError) as exc_info:
         repository.delete_receipt(created.record.receipt_id, owner_user_id=222)
 
+    assert "../escape.jpg" in str(exc_info.value)
     assert all(path.exists() for path in existing_paths)
     with connect_database(app_settings) as connection:
         document = connection.execute("select deleted_at from documents where id = ?", (created.record.document_id,)).fetchone()
     assert document["deleted_at"] is None
+
+
+def test_delete_legacy_receipt_returns_vault_relative_note_path(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    legacy_artifact = write_receipt_note(app_settings, _legacy_session(tmp_path, user_id=222), _parsed_receipt())
+    repository = ReceiptRepository(app_settings)
+
+    result = repository.delete_receipt(legacy_artifact.receipt_id, owner_user_id=222)
+
+    assert result.source == "legacy"
+    assert result.note_path == legacy_artifact.note_path.relative_to(app_settings.obsidian_vault)
 
 
 def test_non_admin_cannot_delete_another_users_db_document(tmp_path: Path) -> None:
