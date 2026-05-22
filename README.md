@@ -245,9 +245,11 @@ private S3/B2 objects, например
 local backend для OCR и dev/local image storage.
 
 `data/debug/openai/...` появляется только если OpenAI вернул невалидный JSON.
-При старте бот безопасно чистит старые export ZIP, debug artifacts и временные
+При старте бот безопасно чистит только ожидаемые старые export ZIP
+`receipts_*.zip`, OpenAI debug artifacts `*.openai.raw.txt` и временные
 materialized/cache-файлы из `data/tmp/materialized`, `data/tmp/exports` и
-`data/tmp/telegram`. Retention управляется настройками
+`data/tmp/telegram`. Cleanup отказывается запускаться на опасных storage roots.
+Retention управляется настройками
 `STORAGE_RETENTION_EXPORT_DAYS`, `STORAGE_RETENTION_DEBUG_DAYS` и
 `STORAGE_RETENTION_TMP_HOURS`.
 
@@ -386,6 +388,9 @@ OpenAI должен вернуть строгий JSON:
   плюс canonical DB-файлы под `Canonical/<receipt_id>/`.
 - `/grant_receipt <user_id> <receipt_id>` — только для админа, deep-copy
   DB-first чека пользователю или legacy-copy старого manifest-backed чека.
+- `/storage_health` — только для админа, read-only отчёт по `documents` /
+  `document_files`, missing files, checksum drift, unsafe refs и orphan app
+  files.
 
 ## 13. Production и Docker
 

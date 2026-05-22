@@ -171,8 +171,9 @@ document rows redundant or if retention policy requires delayed deletion.
 ### 2026-05-22 - Runtime retention cleanup for non-canonical artifacts
 
 **Status:** active
-**Decision:** Runtime cleanup removes old export ZIPs, debug artifacts, and
-materialized temp/cache files, but does not delete canonical document files.
+**Decision:** Runtime cleanup removes only expected old export ZIPs, OpenAI
+debug artifacts, and materialized temp/cache files, but does not delete
+canonical document files.
 **Context:** S3-backed images introduced temporary materialized local copies, and
 export/debug files can contain private receipt data while growing without bound.
 **Reason:** Non-canonical artifacts should not become accidental long-term
@@ -182,11 +183,32 @@ policy instead of generic age-based cleanup.
 `data/tmp`; keep OpenAI debug in Obsidian. Manual cleanup is easy to forget;
 broad tmp cleanup risks active sessions; vault debug files can sync private raw
 LLM output.
-**Impact:** Startup cleanup applies configured retention to
-`EXPORT_STORAGE_DIR`, `DEBUG_STORAGE_DIR`, and selected temp cache directories:
-`materialized`, `exports`, and `telegram`.
+**Impact:** Startup cleanup applies configured retention only to
+`EXPORT_STORAGE_DIR/<user_id>/receipts_*.zip`,
+`DEBUG_STORAGE_DIR/openai/<user_id>/YYYY/MM/*.openai.raw.txt`, and selected temp
+cache directories: `materialized`, `exports`, and `telegram`. Cleanup refuses
+protected roots such as `DATA_DIR`, `APP_STORAGE_DIR`, `OBSIDIAN_VAULT`, the
+SQLite DB directory, project root, and descendants of canonical storage roots.
 **Review trigger:** Revisit when role-specific retention settings or admin
 storage controls are implemented.
+
+### 2026-05-22 - Storage health is read-only
+
+**Status:** active
+**Decision:** Storage health checks report DB/file/object drift but do not
+repair, backfill, migrate, or delete canonical data.
+**Context:** `document_files` can reference local files, Obsidian export files,
+and private S3/B2 objects. After moving images to generic storage refs, the bot
+needs a way to detect missing files, unsafe refs, checksum drift, failed storage
+states, and orphan app-storage files.
+**Reason:** Read-only reporting is safe to run from Telegram admin commands and
+keeps repair/backfill decisions explicit for a later PR.
+**Alternatives considered:** Add automatic repair/backfill immediately; rely on
+manual filesystem inspection. Automatic repair is too risky for this small PR;
+manual inspection misses DB/S3 drift.
+**Impact:** Admins can run `/storage_health` to get a compact report. S3 health
+uses metadata/head checks only and does not download objects.
+**Review trigger:** Revisit in a dedicated repair/backfill PR.
 
 ### 2026-05-22 - OCR_VERIFIED is legacy-only
 

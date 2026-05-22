@@ -2,6 +2,45 @@
 
 ## 2026-05-22
 
+### Add storage safety and health checks
+
+**Summary:** Hardened runtime retention cleanup and added read-only storage
+health reporting for DB-backed documents and files.
+**Files changed:**
+
+- `app/storage/retention.py`
+- `app/storage/health.py`
+- `app/storage/object_store.py`
+- `app/telegram/bot.py`
+- `app/telegram/handlers/storage.py`
+- `tests/test_storage_retention.py`
+- `tests/test_storage_health.py`
+- `README.md`
+- `docs/PROJECT_STATE.md`
+- `docs/DECISIONS.md`
+- `docs/NEXT_STEPS.md`
+- `docs/TASK_LOG.md`
+
+**Details:**
+
+- Retention cleanup is now pattern-limited for export ZIPs and OpenAI debug
+  files, and refuses dangerous cleanup roots.
+- Added read-only health checks for unsafe refs, missing/non-file targets,
+  size/hash drift, S3 head metadata, non-final document statuses, and orphan
+  app-storage files.
+- Added admin-only `/storage_health` Telegram command with compact issue
+  summary.
+- No repair, backfill, migration, or canonical file deletion was added.
+
+**Reason:** The previous age-based cleanup was too broad if storage roots were
+misconfigured, and DB-first file storage needs a safe way to inspect drift before
+adding repair tooling.
+**Validation:** `./.venv/bin/python -m pytest -q` passed with 106 tests.
+**Follow-ups:** PR9: move runtime correction rules to SQLite; later storage
+repair/backfill should stay dry-run-first.
+**Related decisions:** `2026-05-22 - Runtime retention cleanup for
+non-canonical artifacts`; `2026-05-22 - Storage health is read-only`.
+
 ### Add storage hygiene and retention cleanup
 
 **Summary:** Added runtime cleanup for non-canonical storage artifacts and moved

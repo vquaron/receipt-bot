@@ -2,14 +2,6 @@
 
 ## Immediate next steps
 
-- [ ] PR8: add storage health checks and optional repair/backfill tooling.
-  - Context: Canonical images can now live in local storage or private S3/B2,
-    while file metadata lives in SQLite `document_files`.
-  - Expected outcome: report missing local/S3/vault files, checksum/size drift
-    where practical, invalid storage refs, `storage_failed` documents, and
-    orphaned local app-storage files. Any repair/backfill must be dry-run-first.
-  - Depends on: generic `document_files` storage refs and PR7 retention cleanup.
-
 - [ ] PR9: move runtime correction rules from `data/corrections.json` to SQLite
   `correction_rules`.
   - Context: The schema exists, but runtime learning still writes JSON.
@@ -49,6 +41,11 @@
     mobile workflow.
 
 ## Backlog
+
+- [ ] Add storage repair/backfill tooling.
+  - Why it matters: Health checks now report drift, but repair should remain a
+    separate dry-run-first operation.
+  - Priority: medium
 
 - [ ] PR10: add magic-link `/web` flow and read-only API/PWA MVP.
   - Why it matters: This is the likely bridge to mobile PWA.
