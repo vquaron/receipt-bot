@@ -99,6 +99,29 @@ Legacy `data/sessions/*.json` is not imported.
 **Review trigger:** Revisit if the project later adds resumable background
 processing or multi-session review UX.
 
+### 2026-05-22 - Canonical document files in app storage
+
+**Status:** active
+**Decision:** For newly confirmed documents, canonical receipt/order image and
+OCR files live under `APP_STORAGE_DIR/documents/<document_id>/` and are recorded
+in SQLite `document_files`; Obsidian files are export artifacts.
+**Context:** DB-first document persistence needs stable document ids and
+queryable file metadata without treating the Obsidian vault as primary storage.
+**Reason:** App storage keeps canonical private artifacts under the application's
+controlled storage tree, while Obsidian can remain a readable export that can be
+regenerated or omitted later.
+**Alternatives considered:** Keep moving canonical files directly into the vault;
+store only paths without hashes/metadata; move all exports out of Obsidian.
+Keeping canonical files in the vault would preserve the old source-of-truth
+ambiguity; path-only records are weaker for audit; dropping Obsidian export is
+not desired for the MVP.
+**Impact:** New confirm flows move temp files into app storage, record
+`original_image`, `clean_ocr`, and `source_ocr` file rows, and create Obsidian
+note/image rows only as export files. New manifest JSON files are not created.
+**Review trigger:** Revisit in the file retention/image policy PR if optimized
+images, EXIF stripping, or original-image retention settings change the storage
+contract.
+
 ### 2026-05-21 - Telegram as current review UI
 
 **Status:** active  

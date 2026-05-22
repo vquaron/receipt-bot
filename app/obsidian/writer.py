@@ -23,11 +23,14 @@ class ReceiptArtifact:
     receipt_id: str
     file_name: str
     note_path: Path
-    manifest_path: Path
+    manifest_path: Path | None
     date: str
     merchant: str
     amount: str
     currency: str
+    attachment_path: Path | None = None
+    note_rel: Path | None = None
+    attachment_rel: Path | None = None
 
 
 def write_receipt_note(
@@ -66,11 +69,7 @@ def write_receipt_note(
     shutil.move(str(session.clean_ocr_path), clean_path)
     shutil.move(str(session.source_ocr_path), source_path)
 
-    possible_errors = [
-        str(item)
-        for item in normalized.get("possible_errors", [])
-        if str(item).strip()
-    ]
+    possible_errors = _normalized_possible_errors(normalized.get("possible_errors", []))
     if used_fallback_date:
         possible_errors.append("Дата не определена из чека; использована текущая дата.")
 
@@ -120,6 +119,59 @@ def write_receipt_note(
     )
 
 
+def export_receipt_note(
+    settings: Settings,
+    *,
+    user_id: int,
+    file_stem: str,
+    document_type: str,
+    parsed: dict[str, object],
+    source_image_path: Path,
+) -> ReceiptArtifact:
+    normalized = normalize_receipt_properties(parsed)
+    note_date, used_fallback_date = _resolve_note_date(str(normalized.get("date", "")))
+    merchant = str(normalized.get("merchant", "")) or "unknown_merchant"
+    amount = str(normalized.get("amount", ""))
+    stamp = _as_datetime(note_date)
+
+    note_rel = user_dated_relpath(settings, user_id, "Receipts", stamp, f"{file_stem}.md")
+    attachment_rel = user_dated_relpath(settings, user_id, "Attachments/receipts", stamp, f"{file_stem}.jpg")
+    note_path = settings.obsidian_vault / note_rel
+    attachment_path = settings.obsidian_vault / attachment_rel
+    for path in (note_path, attachment_path):
+        ensure_parent(path)
+
+    shutil.copy2(source_image_path, attachment_path)
+    possible_errors = _normalized_possible_errors(normalized.get("possible_errors", []))
+    if used_fallback_date:
+        possible_errors.append("Дата не определена из чека; использована текущая дата.")
+    note_path.write_text(
+        render_markdown(
+            parsed=normalized,
+            note_date=note_date.isoformat(),
+            attachment_rel=attachment_rel,
+            clean_rel=None,
+            source_rel=None,
+            possible_errors=possible_errors,
+            document_type=document_type,
+        ),
+        encoding="utf-8",
+    )
+    return ReceiptArtifact(
+        receipt_id=file_stem,
+        file_name=f"{file_stem}.md",
+        note_path=note_path,
+        manifest_path=None,
+        date=note_date.isoformat(),
+        merchant=merchant,
+        amount=amount or "unknown_amount",
+        currency="AMD",
+        attachment_path=attachment_path,
+        note_rel=note_rel,
+        attachment_rel=attachment_rel,
+    )
+
+
 def write_openai_debug_file(settings: Settings, session: ReceiptSession, raw_response: str) -> Path:
     debug_rel = user_dated_relpath(
         settings,
@@ -139,8 +191,8 @@ def render_markdown(
     parsed: dict[str, object],
     note_date: str,
     attachment_rel: Path,
-    clean_rel: Path,
-    source_rel: Path,
+    clean_rel: Path | None,
+    source_rel: Path | None,
     possible_errors: list[str],
     document_type: str = "receipt",
 ) -> str:
@@ -153,6 +205,7 @@ def render_markdown(
     summary_ru = str(parsed.get("summary_ru", ""))
     items = parsed.get("items", [])
     errors_block = "\n".join(f"- {item}" for item in possible_errors) or "- Нет"
+    ocr_block = _render_ocr_block(clean_rel=clean_rel, source_rel=source_rel)
 
     return f"""---
 date: {yaml_string(note_date)}
@@ -191,12 +244,7 @@ category: {yaml_string(category)}
 ## Возможные ошибки распознавания
 
 {errors_block}
-
-## Контроль OCR
-
-- Clean OCR: [[{clean_rel.as_posix()}]]
-- OCR used for OpenAI: [[{source_rel.as_posix()}]]
-"""
+{ocr_block}"""
 
 
 def render_items_table(items: object, *, language: str) -> str:
@@ -234,6 +282,18 @@ def _write_manifest(path: Path, manifest: dict[str, object]) -> None:
     path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _render_ocr_block(*, clean_rel: Path | None, source_rel: Path | None) -> str:
+    if clean_rel is None and source_rel is None:
+        return ""
+    lines = ["", "## Контроль OCR", ""]
+    if clean_rel is not None:
+        lines.append(f"- Clean OCR: [[{clean_rel.as_posix()}]]")
+    if source_rel is not None:
+        lines.append(f"- OCR used for OpenAI: [[{source_rel.as_posix()}]]")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _resolve_note_date(value: str) -> tuple[date, bool]:
     if value:
         try:
@@ -245,6 +305,17 @@ def _resolve_note_date(value: str) -> tuple[date, bool]:
 
 def _as_datetime(value: date) -> datetime:
     return datetime(value.year, value.month, value.day)
+
+
+def _normalized_possible_errors(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        compact = " ".join(str(item).split())
+        if compact:
+            result.append(compact[:180])
+    return result[:8]
 
 
 def _cell(value: str) -> str:
