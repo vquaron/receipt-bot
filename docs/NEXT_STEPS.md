@@ -2,15 +2,6 @@
 
 ## Immediate next steps
 
-- [ ] PR5 follow-up: make delete/copy/export fully DB-first.
-  - Context: Confirmed reviews now create `documents`, `document_items`, and
-    `document_files`, and `/my_receipts` + `/receipt` read new DB documents.
-    `/delete_receipt`, `/grant_receipt`, and `/export_receipts` still use
-    legacy manifest/file behavior.
-  - Expected outcome: new receipts delete/copy/export from DB `document_files`;
-    manifest fallback remains only for old receipts.
-  - Depends on: DB-first document/file creation.
-
 - [ ] PR6: implement file retention and image policy.
   - Context: Storage cost matters. Current files preserve original image, clean
     OCR, source OCR, and Obsidian export artifacts for new receipts.
@@ -61,16 +52,6 @@
   `correction_rules`.
   - Why it matters: Rules need scoped uniqueness, usage counts, future editing,
     and safer application.
-  - Priority: high
-
-- [ ] Implement DB-first `/delete_receipt` with manifest fallback.
-  - Why it matters: New receipts should delete only files recorded in
-    `document_files`; old receipts can still use manifest fallback.
-  - Priority: high
-
-- [ ] Implement DB-first `/grant_receipt` and `/export_receipts`.
-  - Why it matters: New DB-first receipts no longer create manifests, so sharing
-    and export need to read `documents` and `document_files`.
   - Priority: high
 
 - [ ] Add cleanup for `data/exports` and debug retention.

@@ -6,9 +6,9 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from app.obsidian.delete import ReceiptDeleteError, delete_receipt
+from app.receipts.repository import ReceiptDeleteError
 from app.telegram.handlers.access import ensure_access
-from app.telegram.handlers.common import access, settings
+from app.telegram.handlers.common import access, receipts
 
 
 LOGGER = logging.getLogger(__name__)
@@ -27,12 +27,10 @@ async def delete_receipt_command(update: Update, context: ContextTypes.DEFAULT_T
     allow_all = access_control.is_admin(update.effective_user.id)
     try:
         result = await asyncio.to_thread(
-            delete_receipt,
-            settings(context).obsidian_vault,
+            receipts(context).delete_receipt,
             note_name,
             owner_user_id=update.effective_user.id,
             allow_all_users=allow_all,
-            user_vault_root=settings(context).user_vault_root,
         )
     except ReceiptDeleteError as exc:
         await update.message.reply_text(f"Не удалось удалить чек: {exc}")
@@ -45,7 +43,7 @@ async def delete_receipt_command(update: Update, context: ContextTypes.DEFAULT_T
         "\n".join(
             [
                 f"Удалено файлов: {len(result.deleted)}",
-                f"Заметка: {result.note_path.name}",
+                f"receipt_id: {result.receipt_id}",
                 f"Не найдено связанных файлов: {len(result.missing)}",
             ]
         )

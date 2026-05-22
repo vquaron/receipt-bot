@@ -336,17 +336,24 @@ OpenAI должен вернуть строгий JSON:
 /delete_receipt 2025-11-24_at_torg_1318AMD.md
 ```
 
-Удаление связанных файлов пока остаётся legacy-командой: оно использует manifest JSON или fallback по wikilinks из разделов `Оригинал` и `Контроль OCR`. DB-first удаление новых чеков запланировано отдельным PR. В legacy-режиме бот удаляет только файлы внутри `OBSIDIAN_VAULT`.
+Для новых DB-first чеков удаление использует SQLite `document_files`: бот
+удаляет canonical файлы из `data/storage/documents/<document_id>/`, удаляет
+Obsidian export-файлы и помечает документ как deleted в SQLite. DB row остаётся
+для аудита и скрывается из списков.
 
-Для пользователя дополнительно проверяется scope: manifest не может удалить файлы за пределами `Users/<telegram_user_id>/...`.
+Для старых чеков остаётся fallback через manifest JSON или wikilinks из Markdown.
+В обоих режимах проверяется scope: обычный пользователь не может удалить чужой
+чек, а записанные пути не могут выходить за пределы настроенных storage roots.
 
 Команды для получения своих чеков:
 
 - `/my_receipts` — показать последние сохранённые чеки;
 - `/receipt <receipt_id>` — получить краткую карточку, изображение и Markdown-файл чека;
 - `/order` — обработать следующее фото как скриншот заказа;
-- `/export_receipts` — получить ZIP-архив своей папки чеков.
-- `/grant_receipt <user_id> <receipt_id>` — только для админа, скопировать существующий чек в отдельную папку пользователя.
+- `/export_receipts` — получить ZIP-архив своих чеков: readable Obsidian files
+  плюс canonical DB-файлы под `Canonical/<receipt_id>/`.
+- `/grant_receipt <user_id> <receipt_id>` — только для админа, deep-copy
+  DB-first чека пользователю или legacy-copy старого manifest-backed чека.
 
 ## 13. Production и Docker
 
@@ -386,7 +393,7 @@ WEBHOOK_PORT=8080
 python -m pytest -q
 ```
 
-Тесты покрывают path safety, JSON parsing, Markdown rendering, access control, SQLite migrations, scoped correction rules, manifest deletion, user isolation, DB-first documents/items/files, per-user receipt index/export, processing sessions и user quotas.
+Тесты покрывают path safety, JSON parsing, Markdown rendering, access control, SQLite migrations, scoped correction rules, manifest deletion, user isolation, DB-first documents/items/files/delete/copy/export, per-user receipt index/export, processing sessions и user quotas.
 
 ## 15. Ограничения MVP
 

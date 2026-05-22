@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import shutil
 import zipfile
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from app.config import Settings
-from app.repositories.documents import DocumentRepository
+from app.obsidian.delete import ReceiptDeleteError as LegacyReceiptDeleteError
+from app.obsidian.delete import delete_receipt as delete_legacy_receipt
+from app.repositories.documents import DocumentAmbiguousError, DocumentRepository, DocumentStorageError
 from app.receipts.document_types import normalize_document_type
 from app.receipts.models import ReceiptFileRecord, ReceiptRecord
 from app.storage.paths import ensure_parent, next_available_stem, safe_vault_path
@@ -58,7 +61,61 @@ class ReceiptRepository:
     def file_path(self, file_record: ReceiptFileRecord) -> Path:
         return self.documents.file_path(file_record)
 
+    def delete_receipt(
+        self,
+        query: str,
+        *,
+        owner_user_id: int,
+        allow_all_users: bool = False,
+    ) -> ReceiptDeleteResult:
+        try:
+            record = self.documents.get_any_document(query) if allow_all_users else self.documents.get_user_document(owner_user_id, query)
+        except DocumentAmbiguousError as exc:
+            raise ReceiptDeleteError(str(exc)) from exc
+        if record is not None:
+            try:
+                result = self.documents.delete_document(record)
+            except DocumentStorageError as exc:
+                raise ReceiptDeleteError(str(exc)) from exc
+            return ReceiptDeleteResult(
+                receipt_id=result.record.receipt_id,
+                document_id=result.record.document_id,
+                deleted=result.deleted,
+                missing=result.missing,
+                note_path=result.record.note_rel,
+                source="db",
+            )
+
+        try:
+            legacy = delete_legacy_receipt(
+                self.settings.obsidian_vault,
+                query,
+                owner_user_id=owner_user_id,
+                allow_all_users=allow_all_users,
+                user_vault_root=self.settings.user_vault_root,
+            )
+        except LegacyReceiptDeleteError as exc:
+            raise ReceiptDeleteError(str(exc)) from exc
+        return ReceiptDeleteResult(
+            receipt_id=legacy.note_path.stem,
+            document_id="",
+            deleted=legacy.deleted,
+            missing=legacy.missing,
+            note_path=legacy.note_path,
+            source="legacy",
+        )
+
     def copy_receipt_to_user(self, query: str, target_user_id: int) -> ReceiptRecord:
+        try:
+            db_source = self.documents.get_any_document(query)
+        except DocumentAmbiguousError as exc:
+            raise ReceiptCopyError(str(exc)) from exc
+        if db_source is not None:
+            try:
+                return self.documents.copy_document_to_user(db_source, target_user_id).record
+            except DocumentStorageError as exc:
+                raise ReceiptCopyError(str(exc)) from exc
+
         source = self.find_any_receipt(query)
         if source is None:
             raise ReceiptNotFoundError("Receipt was not found.")
@@ -102,6 +159,8 @@ class ReceiptRepository:
                 for path in sorted(root.glob("**/*")):
                     if path.is_file():
                         archive.write(path, path.relative_to(root).as_posix())
+            for archive_file in self.documents.archive_files_for_user(user_id):
+                archive.write(archive_file.path, archive_file.archive_name)
         return export_path
 
     def _list_all_receipts(self) -> list[ReceiptRecord]:
@@ -188,8 +247,22 @@ class ReceiptNotFoundError(RuntimeError):
     pass
 
 
+class ReceiptDeleteError(RuntimeError):
+    pass
+
+
 class ReceiptCopyError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class ReceiptDeleteResult:
+    receipt_id: str
+    document_id: str
+    deleted: list[Path]
+    missing: list[Path]
+    note_path: Path
+    source: str
 
 
 def _date_parts(date_value: str, note_rel: Path) -> tuple[str, str]:

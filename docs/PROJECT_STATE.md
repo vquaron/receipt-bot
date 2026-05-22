@@ -22,8 +22,8 @@ structured SQLite data rather than parse Markdown.
 - Current human-readable export: Obsidian Markdown in `OBSIDIAN_VAULT`.
 - Current processing state: a hybrid model. Users, access requests, quota
   events, review processing sessions, and newly confirmed receipt/order
-  documents are in SQLite; correction rules and some legacy receipt commands
-  still use compatible file-based MVP paths until later PRs migrate them.
+  documents are in SQLite; correction rules still use compatible file-based MVP
+  paths until later PRs migrate them.
 
 ## Source of truth
 
@@ -48,6 +48,8 @@ Current implementation status:
 - Existing Markdown/manifest files remain operational artifacts and fallback
   data for old receipts, but new manifest JSON files are no longer created by
   the confirm flow.
+- Delete, grant/copy, and export are DB-first for new documents and keep
+  manifest/Markdown fallback for old receipts.
 
 ## Current data flow
 
@@ -199,6 +201,12 @@ Current documents:
   `document_files`.
 - New manifest JSON files are not created; manifest parsing remains a fallback
   for old receipts.
+- `/delete_receipt` removes files recorded in `document_files`, sets
+  `documents.status='deleted'`, and keeps a soft-deleted DB row for audit.
+- `/grant_receipt` deep-copies DB documents to a new document id for the target
+  user and regenerates the Obsidian export.
+- `/export_receipts` includes readable Obsidian files plus canonical DB files
+  under `Canonical/<receipt_id>/` in the ZIP archive.
 
 Future web authorization:
 
@@ -238,8 +246,6 @@ Future web authorization:
 
 ## Current limitations
 
-- `/delete_receipt`, `/grant_receipt`, and `/export_receipts` still use legacy
-  manifest/file behavior and are not fully DB-first.
 - `correction_rules`, `magic_links`, and `web_sessions` are schema-level
   foundations, not fully wired into runtime logic yet.
 - Correction rules are still stored in `data/corrections.json`.
@@ -268,6 +274,7 @@ Current tests cover:
 - SQLite-backed processing sessions and temp cleanup;
 - DB-first document/item/file creation and Obsidian export without new
   manifests;
+- DB-first delete/copy/export with legacy manifest fallback;
 - correction rules;
 - order document parsing/review behavior;
 - user-scoped receipt listing.
