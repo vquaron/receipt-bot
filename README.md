@@ -189,7 +189,7 @@ data/tmp/processing/
 data/corrections.json
 ```
 
-`data/access.json`, `data/users/users.json`, `data/users/access_requests.json` и `data/sessions/*.json` больше не являются runtime-хранилищем и не импортируются автоматически. Доступ задаётся через `.env` bootstrap и меняется через SQLite-backed Telegram approval flow. Незавершённые проверки восстанавливаются из SQLite `processing_sessions`; временные изображения и OCR-файлы лежат в `data/tmp/processing/<session_id>/`, после confirm переносятся в `data/storage/documents/<document_id>/`, а после cancel/failure очищаются.
+`data/access.json`, `data/users/users.json`, `data/users/access_requests.json` и `data/sessions/*.json` больше не являются runtime-хранилищем и не импортируются автоматически. Доступ задаётся через `.env` bootstrap и меняется через SQLite-backed Telegram approval flow. Незавершённые проверки восстанавливаются из SQLite `processing_sessions`; временные изображения и OCR-файлы лежат в `data/tmp/processing/<session_id>/`. После confirm canonical images сохраняются через выбранный image backend (`local` или `s3`), OCR-файлы сохраняются в `data/storage/documents/<document_id>/`, а temp-dir очищается при финализации session.
 
 Если пользователь не в allowlist, бот не скачивает фото, не вызывает Google Vision, не вызывает OpenAI и не создаёт файлы. Вместо этого создаётся pending-заявка, а всем администраторам приходит сообщение с кнопками `Approve` / `Reject`.
 
@@ -339,7 +339,7 @@ OpenAI должен вернуть строгий JSON:
 }
 ```
 
-В Markdown-заметке сначала выводится чек на русском, затем таблица товаров, затем английская версия и таблица товаров на английском. Исходный OCR не выводится в теле заметки; canonical OCR сохраняется в `data/storage/documents/<document_id>/` и записывается в SQLite `document_files`.
+В Markdown-заметке сначала выводится чек на русском, затем таблица товаров, затем английская версия и таблица товаров на английском. Исходный OCR не выводится в теле заметки; canonical OCR сохраняется в `data/storage/documents/<document_id>/` и записывается в SQLite `document_files`. Для новых DB-first документов Markdown attachment создаётся из `stored_image`, а canonical image может храниться локально или в private S3/B2 bucket.
 
 Если JSON невалиден, заметка не создаётся, а сырой ответ сохраняется в `DEBUG/openai/...`.
 
@@ -358,9 +358,9 @@ OpenAI должен вернуть строгий JSON:
 ```
 
 Для новых DB-first чеков удаление использует SQLite `document_files`: бот
-удаляет canonical файлы из `data/storage/documents/<document_id>/`, удаляет
-Obsidian export-файлы и помечает документ как deleted в SQLite. DB row остаётся
-для аудита и скрывается из списков.
+удаляет canonical local files, удаляет все версии recorded S3 image objects,
+удаляет Obsidian export-файлы и помечает документ как deleted в SQLite. DB row
+остаётся для аудита и скрывается из списков.
 
 Для старых чеков остаётся fallback через manifest JSON или wikilinks из Markdown.
 В обоих режимах проверяется scope: обычный пользователь не может удалить чужой

@@ -350,21 +350,6 @@ path toward future analytics.
 
 ## Uncertain / pending decisions
 
-### 2026-05-22 - Permanent image retention policy
-
-**Status:** uncertain  
-**Question:** Should the long-term default keep raw original images, optimized
-stored images, or both?  
-**Context:** The user values original receipt images, but storage cost matters as
-users and receipts grow. Earlier planning proposed optimized `stored_image` as
-the default and optional `original_image`.  
-**Options:** Keep originals always; keep optimized stored images only; keep both
-for privileged/admin users; make retention configurable by user/role.  
-**Current leaning:** Preserve originals until a DB-backed image policy PR
-implements explicit settings and safe migration.  
-**Needed to decide:** Measure average image size and OCR/debug value across real
-receipts, then choose role/user defaults.
-
 ### 2026-05-22 - OCR_VERIFIED retention after Russian-only review
 
 **Status:** uncertain  
