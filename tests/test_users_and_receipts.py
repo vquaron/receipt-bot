@@ -13,7 +13,7 @@ from app.obsidian.writer import write_receipt_note
 from app.receipts.repository import ReceiptRepository
 from app.review.models import ReceiptSession
 from app.telegram.handlers.receipt import _quota_message
-from app.telegram.handlers.receipts import _first_existing_file
+from app.telegram.handlers.receipts import _cleanup_materialized_tmp_file, _first_existing_file
 from app.users.access_service import AccessControl
 from app.users.models import UserRole
 from app.users.quotas import QuotaService
@@ -182,6 +182,23 @@ def test_first_existing_file_accepts_configured_user_root(tmp_path: Path) -> Non
         suffixes=(".jpg",),
     )
     assert found == image
+
+
+def test_cleanup_materialized_tmp_file_removes_only_tmp_paths(tmp_path: Path) -> None:
+    tmp_root = tmp_path / "data" / "tmp"
+    materialized = tmp_root / "telegram" / "222" / "receipt-1" / "stored.jpg"
+    materialized.parent.mkdir(parents=True, exist_ok=True)
+    materialized.write_text("image", encoding="utf-8")
+    outside = tmp_path / "Users" / "222" / "Attachments" / "stored.jpg"
+    outside.parent.mkdir(parents=True, exist_ok=True)
+    outside.write_text("image", encoding="utf-8")
+
+    _cleanup_materialized_tmp_file(materialized, tmp_root)
+    _cleanup_materialized_tmp_file(outside, tmp_root)
+
+    assert not materialized.exists()
+    assert not (tmp_root / "telegram" / "222" / "receipt-1").exists()
+    assert outside.exists()
 
 
 def test_find_any_receipt_uses_configured_user_vault_root(tmp_path: Path) -> None:

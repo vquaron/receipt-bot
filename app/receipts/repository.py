@@ -163,13 +163,16 @@ class ReceiptRepository:
         export_path = self.settings.data_dir / "exports" / str(user_id) / f"receipts_{datetime.now():%Y%m%d_%H%M%S}.zip"
         materialize_root = self.settings.tmp_storage_dir / "exports" / uuid4().hex
         ensure_parent(export_path)
-        with zipfile.ZipFile(export_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            if root.exists():
-                for path in sorted(root.glob("**/*")):
-                    if path.is_file():
-                        archive.write(path, path.relative_to(root).as_posix())
-            for archive_file in self.documents.archive_files_for_user(user_id, materialize_root=materialize_root):
-                archive.write(archive_file.path, archive_file.archive_name)
+        try:
+            with zipfile.ZipFile(export_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                if root.exists():
+                    for path in sorted(root.glob("**/*")):
+                        if path.is_file():
+                            archive.write(path, path.relative_to(root).as_posix())
+                for archive_file in self.documents.archive_files_for_user(user_id, materialize_root=materialize_root):
+                    archive.write(archive_file.path, archive_file.archive_name)
+        finally:
+            shutil.rmtree(materialize_root, ignore_errors=True)
         return export_path
 
     def _list_all_receipts(self) -> list[ReceiptRecord]:

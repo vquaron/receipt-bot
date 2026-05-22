@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
+import shutil
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -82,7 +84,10 @@ async def receipt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
     await update.message.reply_text(summary)
     if image_path:
-        await update.message.reply_photo(photo=image_path)
+        try:
+            await update.message.reply_photo(photo=image_path)
+        finally:
+            _cleanup_materialized_tmp_file(image_path, settings(context).tmp_storage_dir)
     if note_path and note_path.exists():
         await update.message.reply_document(document=note_path)
 
@@ -198,3 +203,24 @@ def _record_paths(record, context: ContextTypes.DEFAULT_TYPE, user_id: int):
 
 def _first_record_file(record, kind: str):
     return next((file for file in record.file_records if file.kind == kind), None)
+
+
+def _cleanup_materialized_tmp_file(path: Path, tmp_root: Path) -> None:
+    try:
+        resolved_path = path.resolve()
+        resolved_root = tmp_root.resolve()
+    except OSError:
+        return
+    if not resolved_path.is_relative_to(resolved_root):
+        return
+    try:
+        resolved_path.unlink(missing_ok=True)
+    except OSError:
+        return
+    parent = resolved_path.parent
+    while parent != resolved_root:
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+        parent = parent.parent

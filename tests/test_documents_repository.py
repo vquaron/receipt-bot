@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import sqlite3
 import zipfile
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,6 +35,7 @@ from app.storage.object_store import StoredObject
 from app.storage.images import create_stored_image
 from app.storage.sessions import SessionStore
 from app.telegram.handlers import receipt as receipt_handler
+import app.repositories.documents as documents_module
 
 
 def test_confirmed_document_creates_db_rows_files_and_obsidian_export(tmp_path: Path) -> None:
@@ -348,6 +351,36 @@ def test_s3_storage_failure_marks_document_failed_and_keeps_temp(tmp_path: Path,
     assert row["status"] == DOCUMENT_STATUS_STORAGE_FAILED
 
 
+def test_confirmed_document_storage_failure_cleans_local_artifacts(tmp_path: Path, monkeypatch) -> None:
+    app_settings = _settings(tmp_path)
+    session = _session(app_settings, user_id=222)
+    original_insert_local_file = documents_module._insert_local_file
+
+    def _failing_insert_local_file(connection, document_id, kind, root, absolute_path, *, created_at, is_canonical=False):
+        if kind == FILE_KIND_SOURCE_OCR:
+            raise sqlite3.OperationalError("insert failed")
+        return original_insert_local_file(
+            connection,
+            document_id,
+            kind,
+            root,
+            absolute_path,
+            created_at=created_at,
+            is_canonical=is_canonical,
+        )
+
+    monkeypatch.setattr(documents_module, "_insert_local_file", _failing_insert_local_file)
+
+    with pytest.raises(DocumentStorageError):
+        DocumentRepository(app_settings).create_confirmed_from_session(session, _parsed_receipt())
+
+    with connect_database(app_settings) as connection:
+        row = connection.execute("select id, status from documents").fetchone()
+    assert row["status"] == DOCUMENT_STATUS_STORAGE_FAILED
+    assert not (app_settings.app_storage_dir / "documents" / row["id"]).exists()
+    assert not (session.image_path.parent / "stored.jpg").exists()
+
+
 def test_s3_copy_export_and_delete_use_object_storage(tmp_path: Path, monkeypatch) -> None:
     app_settings = _settings(
         tmp_path,
@@ -373,9 +406,31 @@ def test_s3_copy_export_and_delete_use_object_storage(tmp_path: Path, monkeypatc
         names = set(archive.namelist())
     assert f"Canonical/{copied.receipt_id}/original.jpg" in names
     assert f"Canonical/{copied.receipt_id}/stored.jpg" in names
+    assert not any((app_settings.tmp_storage_dir / "exports").glob("*"))
 
     repository.delete_receipt(source.record.document_id, owner_user_id=111, allow_all_users=True)
     assert source_original.storage_key in fake_store.deleted
+
+
+def test_materialize_file_rejects_unsafe_s3_storage_key(tmp_path: Path, monkeypatch) -> None:
+    app_settings = _settings(
+        tmp_path,
+        storage_image_backend="s3",
+        s3_bucket_name="receipts",
+        s3_endpoint_url="https://s3.example.test",
+        s3_access_key_id="key-id",
+        s3_secret_access_key="secret",
+    )
+    fake_store = _FakeImageStore(bucket="receipts")
+    monkeypatch.setattr("app.repositories.documents.image_storage", lambda settings: fake_store)
+    created = DocumentRepository(app_settings).create_confirmed_from_session(_session(app_settings, user_id=222), _parsed_receipt())
+    stored = next(file for file in created.record.file_records if file.kind == FILE_KIND_STORED_IMAGE)
+
+    with pytest.raises(DocumentStorageError):
+        ReceiptRepository(app_settings).materialize_file(
+            replace(stored, storage_key="../escape.jpg"),
+            app_settings.tmp_storage_dir / "materialized-test",
+        )
 
 
 def test_stored_image_is_optimized_and_exif_stripped(tmp_path: Path) -> None:

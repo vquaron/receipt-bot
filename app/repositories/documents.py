@@ -92,6 +92,7 @@ class DocumentRepository:
         document_root = self.settings.app_storage_dir / "documents" / document_id
         stored_image_path = session.image_path.parent / "stored.jpg"
         uploaded_image_keys: list[str] = []
+        cleanup_local_paths: list[Path] = [stored_image_path]
         image_store = None
         now = datetime.now()
 
@@ -134,6 +135,7 @@ class DocumentRepository:
             ensure_parent(clean_target)
             shutil.copy2(session.clean_ocr_path, clean_target)
             shutil.copy2(session.source_ocr_path, source_target)
+            cleanup_local_paths.extend([clean_target, source_target])
             with connect_database(self.settings) as connection:
                 connection.execute("begin immediate")
                 _insert_items(connection, document_id=document_id, parsed=normalized, created_at=now)
@@ -179,6 +181,17 @@ class DocumentRepository:
                         image_store.delete_all_versions(key)
                 except Exception:
                     pass
+            for path in reversed(cleanup_local_paths):
+                try:
+                    if path.exists():
+                        path.unlink()
+                except OSError:
+                    pass
+            try:
+                if document_root.exists():
+                    shutil.rmtree(document_root)
+            except OSError:
+                pass
             raise DocumentStorageError("Failed to store canonical document files.") from exc
 
         artifact: ReceiptArtifact | None = None
@@ -532,6 +545,7 @@ class DocumentRepository:
     def materialize_file(self, file_record: ReceiptFileRecord, target_dir: Path) -> Path:
         if file_record.storage_backend != STORAGE_BACKEND_S3:
             return self.file_path(file_record)
+        _validate_object_key(file_record.storage_key)
         target = target_dir / file_record.path.name
         image_storage(self.settings).download_to(file_record.storage_key, target)
         if file_record.sha256 and _sha256_file(target) != file_record.sha256:
