@@ -352,6 +352,20 @@ async def create_note_from_review(session: ReceiptSession, reply_target, context
         return
     delete_session(session.user_id, context, final_state=SessionState.DONE)
     record = result.record
+    if result.artifact is None:
+        await reply_target.reply_text(
+            "\n".join(
+                [
+                    "Документ сохранён, но экспорт в Obsidian завершился ошибкой.",
+                    f"receipt_id: {record.receipt_id}",
+                    f"merchant: {record.merchant}",
+                    f"date: {record.date}",
+                    f"amount: {record.amount or 'unknown_amount'}",
+                    f"currency: {record.currency}",
+                ]
+            )
+        )
+        return
     await reply_target.reply_text(
         "\n".join(
             [

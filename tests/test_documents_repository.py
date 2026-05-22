@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from app.config import Settings
 from app.db.connection import connect_database
+from app.obsidian.writer import export_receipt_note
 from app.receipts.repository import ReceiptRepository
 from app.repositories.documents import (
     FILE_KIND_CLEAN_OCR,
@@ -106,6 +107,25 @@ def test_receipt_repository_lists_and_finds_db_documents_before_manifest_fallbac
     assert repository.file_path(image_file).read_text(encoding="utf-8") == "image"
 
 
+def test_export_receipt_note_ignores_non_list_possible_errors(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    source_image_path = tmp_path / "source.jpg"
+    source_image_path.write_text("image", encoding="utf-8")
+
+    artifact = export_receipt_note(
+        app_settings,
+        user_id=222,
+        file_stem="2026-05-20_test_1AMD",
+        document_type="receipt",
+        parsed={"date": "2026-05-20", "merchant": "Store", "amount": "1", "possible_errors": "bad-value"},
+        source_image_path=source_image_path,
+    )
+
+    note_text = artifact.note_path.read_text(encoding="utf-8")
+    assert "bad-value" not in note_text
+    assert "## Возможные ошибки распознавания\n\n- Нет" in note_text
+
+
 def test_telegram_finalize_persists_corrected_review_before_finishing_session(tmp_path: Path) -> None:
     app_settings = _settings(tmp_path)
     session_store = SessionStore(app_settings)
@@ -135,6 +155,70 @@ def test_telegram_finalize_persists_corrected_review_before_finishing_session(tm
         document = connection.execute("select parsed_json from documents where id = ?", (record.document_id,)).fetchone()
         state = connection.execute("select state from processing_sessions where id = ?", (session.session_id,)).fetchone()
     assert json.loads(document["parsed_json"])["merchant"] == "Corrected Merchant"
+    assert state["state"] == SessionState.DONE.value
+
+
+def test_confirmed_document_marks_export_failed_without_raising(tmp_path: Path, monkeypatch) -> None:
+    app_settings = _settings(tmp_path)
+    session = _session(app_settings, user_id=222)
+
+    def _boom(**kwargs):
+        raise RuntimeError("export failed")
+
+    monkeypatch.setattr("app.repositories.documents.export_receipt_note", _boom)
+    result = DocumentRepository(app_settings).create_confirmed_from_session(session, _parsed_receipt())
+
+    assert result.artifact is None
+    with connect_database(app_settings) as connection:
+        document = connection.execute("select status from documents where id = ?", (result.record.document_id,)).fetchone()
+    assert document["status"] == "export_failed"
+
+
+def test_confirmed_document_ignores_non_list_possible_errors(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    session = _session(app_settings, user_id=222)
+    result = DocumentRepository(app_settings).create_confirmed_from_session(
+        session,
+        {**_parsed_receipt(), "possible_errors": "bad-value"},
+    )
+
+    with connect_database(app_settings) as connection:
+        document = connection.execute(
+            "select possible_errors_json from documents where id = ?",
+            (result.record.document_id,),
+        ).fetchone()
+    assert json.loads(document["possible_errors_json"]) == []
+
+
+def test_telegram_finalize_reports_export_failure_but_marks_session_done(tmp_path: Path, monkeypatch) -> None:
+    app_settings = _settings(tmp_path)
+    session_store = SessionStore(app_settings)
+    repository = ReceiptRepository(app_settings)
+    session = _session(app_settings, user_id=222)
+    session.parsed_receipt = _parsed_receipt(merchant="Corrected Merchant")
+    session.state = SessionState.WAITING_FOR_RUSSIAN_REVIEW
+    session_store.save(session)
+    receipt_handler.SESSIONS[222] = session
+    context = SimpleNamespace(
+        application=SimpleNamespace(
+            bot_data={
+                "settings": app_settings,
+                "session_store": session_store,
+                "receipt_repository": repository,
+            }
+        )
+    )
+    reply_target = _ReplyTarget()
+
+    def _boom(**kwargs):
+        raise RuntimeError("export failed")
+
+    monkeypatch.setattr("app.repositories.documents.export_receipt_note", _boom)
+    asyncio.run(receipt_handler.create_note_from_review(session, reply_target, context))
+
+    assert any("Документ сохранён, но экспорт в Obsidian завершился ошибкой." in message for message in reply_target.messages)
+    with connect_database(app_settings) as connection:
+        state = connection.execute("select state from processing_sessions where id = ?", (session.session_id,)).fetchone()
     assert state["state"] == SessionState.DONE.value
 
 

@@ -125,7 +125,7 @@ class DocumentRepository:
                 self.add_file(document_id, FILE_KIND_OBSIDIAN_ATTACHMENT, artifact.attachment_path, storage_root="vault")
         except Exception:
             self.update_status(document_id, DOCUMENT_STATUS_EXPORT_FAILED)
-            raise
+            artifact = None
 
         record = self.get_user_document(session.user_id, file_stem)
         if record is None:
@@ -442,11 +442,7 @@ def _final_parsed(parsed: dict[str, object]) -> tuple[dict[str, object], date]:
     normalized = normalize_receipt_properties(parsed)
     note_date, used_fallback_date = _resolve_note_date(str(normalized.get("date", "")))
     normalized["date"] = note_date.isoformat()
-    possible_errors = [
-        str(item).strip()
-        for item in normalized.get("possible_errors", [])
-        if str(item).strip()
-    ]
+    possible_errors = _normalized_possible_errors(normalized.get("possible_errors", []))
     if used_fallback_date:
         possible_errors.append("Дата не определена из чека; использована текущая дата.")
     normalized["possible_errors"] = possible_errors
@@ -479,6 +475,17 @@ def _storage_for_kind(kind: str) -> str:
     if kind in {FILE_KIND_ORIGINAL_IMAGE, FILE_KIND_CLEAN_OCR, FILE_KIND_SOURCE_OCR}:
         return "app"
     return "vault"
+
+
+def _normalized_possible_errors(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        compact = " ".join(str(item).split())
+        if compact:
+            result.append(compact[:180])
+    return result[:8]
 
 
 def _sha256_text_file(path: Path) -> str:

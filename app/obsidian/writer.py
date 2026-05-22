@@ -69,11 +69,7 @@ def write_receipt_note(
     shutil.move(str(session.clean_ocr_path), clean_path)
     shutil.move(str(session.source_ocr_path), source_path)
 
-    possible_errors = [
-        str(item)
-        for item in normalized.get("possible_errors", [])
-        if str(item).strip()
-    ]
+    possible_errors = _normalized_possible_errors(normalized.get("possible_errors", []))
     if used_fallback_date:
         possible_errors.append("Дата не определена из чека; использована текущая дата.")
 
@@ -146,11 +142,7 @@ def export_receipt_note(
         ensure_parent(path)
 
     shutil.copy2(source_image_path, attachment_path)
-    possible_errors = [
-        str(item)
-        for item in normalized.get("possible_errors", [])
-        if str(item).strip()
-    ]
+    possible_errors = _normalized_possible_errors(normalized.get("possible_errors", []))
     if used_fallback_date:
         possible_errors.append("Дата не определена из чека; использована текущая дата.")
     note_path.write_text(
@@ -313,6 +305,17 @@ def _resolve_note_date(value: str) -> tuple[date, bool]:
 
 def _as_datetime(value: date) -> datetime:
     return datetime(value.year, value.month, value.day)
+
+
+def _normalized_possible_errors(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        compact = " ".join(str(item).split())
+        if compact:
+            result.append(compact[:180])
+    return result[:8]
 
 
 def _cell(value: str) -> str:
