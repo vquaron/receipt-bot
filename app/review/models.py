@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -12,10 +13,13 @@ from app.receipts.document_types import DOCUMENT_TYPE_RECEIPT, normalize_documen
 
 
 class SessionState(str, Enum):
+    PROCESSING_OCR = "processing_ocr"
     PROCESSING_OPENAI = "processing_openai"
     WAITING_FOR_RUSSIAN_REVIEW = "waiting_for_russian_review"
     WAITING_FOR_CORRECTED_REVIEW = "waiting_for_corrected_review"
     DONE = "done"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
 
 
 @dataclass(slots=True)
@@ -29,6 +33,7 @@ class ReceiptSession:
     document_type: str = DOCUMENT_TYPE_RECEIPT
     parsed_receipt: dict[str, Any] | None = None
     state: SessionState = SessionState.PROCESSING_OPENAI
+    session_id: str = field(default_factory=lambda: uuid4().hex)
 
     def to_json(self) -> dict[str, Any]:
         data = asdict(self)
@@ -43,6 +48,7 @@ class ReceiptSession:
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> "ReceiptSession":
         return cls(
+            session_id=str(data.get("session_id") or uuid4().hex),
             user_id=int(data["user_id"]),
             image_path=Path(str(data["image_path"])),
             clean_ocr_path=Path(str(data["clean_ocr_path"])),

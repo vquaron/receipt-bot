@@ -2,6 +2,43 @@
 
 ## 2026-05-22
 
+### Move processing sessions to SQLite
+
+**Summary:** Moved active Telegram review sessions from file JSON storage to
+SQLite `processing_sessions` and moved temporary processing files out of the
+Obsidian vault.
+**Files changed:**
+
+- `app/review/models.py`
+- `app/storage/sessions.py`
+- `app/telegram/handlers/receipt.py`
+- `app/telegram/handlers/common.py`
+- `app/telegram/bot.py`
+- `tests/test_processing_sessions.py`
+- `README.md`
+- `docs/PROJECT_STATE.md`
+- `docs/DECISIONS.md`
+- `docs/TASK_LOG.md`
+- `docs/NEXT_STEPS.md`
+
+**Details:**
+
+- Added session ids and final/processing states to `ReceiptSession`.
+- Replaced runtime session JSON files with SQLite-backed `SessionStore`.
+- New temp image/OCR files are written to `data/tmp/processing/<session_id>/`
+  and cleaned after confirm/cancel/failure.
+- Waiting review/correction sessions restore after restart; stale OCR/OpenAI
+  sessions fail closed on startup.
+- Active waiting sessions block new photo processing before quota/download/OCR.
+
+**Reason:** Review state should survive restarts through SQLite, and temporary
+files should not be synced or retained as Obsidian export artifacts.
+**Validation:** `./.venv/bin/python -m pytest -q` passed during implementation.
+**Follow-ups:** Continue with PR5: make documents, items, and files DB-first.
+**Related decisions:** `2026-05-22 - SQLite processing sessions and temp outside
+vault`; `2026-05-21 - SQLite as source of truth`;
+`2026-05-21 - Obsidian as export / representation`.
+
 ### Cleanup storage PR1-PR3 decisions and quota audit events
 
 **Summary:** Tightened usage event audit data and removed runtime legacy access

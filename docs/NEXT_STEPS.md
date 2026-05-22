@@ -2,22 +2,13 @@
 
 ## Immediate next steps
 
-- [ ] PR4: move processing sessions to SQLite `processing_sessions` and move
-  temporary files out of the Obsidian vault.
-  - Context: Review sessions currently live in `data/sessions`; temporary image
-    and OCR files are still created under vault `_tmp`.
-  - Expected outcome: unfinished reviews survive restart through SQLite; temp
-    files use `data/tmp/<document_id>/`; cancellation and failed OCR/OpenAI
-    clean up temp files.
-  - Depends on: DB repositories and a clear session repository API.
-
 - [ ] PR5: make documents, items, and files DB-first.
   - Context: The schema includes `documents`, `document_items`, and
-    `document_files`, but note creation still writes directly to Obsidian.
+    `document_files`, but confirmed review still writes directly to Obsidian.
   - Expected outcome: confirmed reviews create DB rows with `parsed_json`,
     `review_payload_json`, `possible_errors_json`, version fields, items, and
     file records; Obsidian note generation becomes export from DB/parsed JSON.
-  - Depends on: Processing sessions and temp storage cleanup.
+  - Depends on: SQLite processing sessions and temp storage cleanup.
 
 - [ ] PR6: implement file retention and image policy.
   - Context: Storage cost matters. Current files preserve original image, clean
@@ -76,10 +67,9 @@
     `document_files`; old receipts can still use manifest fallback.
   - Priority: high
 
-- [ ] Add cleanup for `data/tmp`, `data/exports`, debug retention, and expired
-  sessions.
+- [ ] Add cleanup for `data/exports` and debug retention.
   - Why it matters: Storage cost and stale sensitive files will grow otherwise.
-  - Priority: high
+  - Priority: medium
 
 - [ ] Add magic-link `/web` flow and minimal web session repository.
   - Why it matters: This is the likely bridge to mobile PWA.

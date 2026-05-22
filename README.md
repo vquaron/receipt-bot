@@ -106,6 +106,7 @@ APP_STORAGE_DIR=data/storage
 TMP_STORAGE_DIR=data/tmp
 EXPORT_STORAGE_DIR=data/exports
 DEBUG_STORAGE_DIR=data/debug
+STORAGE_RETENTION_TMP_HOURS=24
 USER_VAULT_ROOT=Users
 REGULAR_DAILY_RECEIPT_LIMIT=10
 REGULAR_MONTHLY_RECEIPT_LIMIT=100
@@ -163,15 +164,15 @@ ALLOWED_TELEGRAM_USER_IDS=123456789,987654321
 PRIVILEGED_TELEGRAM_USER_IDS=
 ```
 
-Админы всегда считаются разрешёнными пользователями. Пользователи, роли, заявки на доступ и события квот хранятся в SQLite:
+Админы всегда считаются разрешёнными пользователями. Пользователи, роли, заявки на доступ, события квот и активные review-сессии хранятся в SQLite:
 
 ```text
 data/app.db
-data/sessions/
+data/tmp/processing/
 data/corrections.json
 ```
 
-`data/access.json`, `data/users/users.json` и `data/users/access_requests.json` больше не являются runtime-хранилищем и не импортируются автоматически. Доступ задаётся через `.env` bootstrap и меняется через SQLite-backed Telegram approval flow.
+`data/access.json`, `data/users/users.json`, `data/users/access_requests.json` и `data/sessions/*.json` больше не являются runtime-хранилищем и не импортируются автоматически. Доступ задаётся через `.env` bootstrap и меняется через SQLite-backed Telegram approval flow. Незавершённые проверки восстанавливаются из SQLite `processing_sessions`; временные изображения и OCR-файлы лежат в `data/tmp/processing/<session_id>/` и очищаются после confirm/cancel/failure.
 
 Если пользователь не в allowlist, бот не скачивает фото, не вызывает Google Vision, не вызывает OpenAI и не создаёт файлы. Вместо этого создаётся pending-заявка, а всем администраторам приходит сообщение с кнопками `Approve` / `Reject`.
 
@@ -379,14 +380,14 @@ WEBHOOK_PORT=8080
 python -m pytest -q
 ```
 
-Тесты покрывают path safety, JSON parsing, Markdown rendering, access control, SQLite migrations, scoped correction rules, manifest deletion, user isolation, per-user receipt index/export и user quotas.
+Тесты покрывают path safety, JSON parsing, Markdown rendering, access control, SQLite migrations, scoped correction rules, manifest deletion, user isolation, per-user receipt index/export, processing sessions и user quotas.
 
 ## 15. Ограничения MVP
 
-- без внешней базы данных; локальное SQLite-хранилище используется для DB-first foundation, доступа пользователей и квот;
+- без внешней базы данных; локальное SQLite-хранилище используется для DB-first foundation, доступа пользователей, квот и review-сессий;
 - без веб-интерфейса;
 - без очереди задач и фоновых воркеров;
-- незавершённые review-сессии хранятся в файлах `data/sessions`;
+- незавершённые review-сессии хранятся в SQLite `processing_sessions`;
 - часть runtime-состояния пока ещё хранится в JSON-файлах в `data`;
 - используется один прямой поток обработки на пользователя;
 - правила исправлений простые и основаны на точных заменах значений.

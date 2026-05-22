@@ -60,7 +60,7 @@ def main() -> None:
 
 
 def build_application(settings: Settings) -> Application:
-    session_store = SessionStore(settings.data_dir)
+    session_store = SessionStore(settings)
     init_sessions(session_store)
 
     application = Application.builder().token(settings.telegram_bot_token).build()

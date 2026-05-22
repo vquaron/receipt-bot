@@ -20,9 +20,10 @@ structured SQLite data rather than parse Markdown.
 - Current DB: SQLite in `data/app.db` with idempotent migrations, WAL, foreign
   keys, and busy timeout.
 - Current human-readable export: Obsidian Markdown in `OBSIDIAN_VAULT`.
-- Current processing state: a hybrid model. Users, access requests, and quota
-  events are in SQLite; receipt files, review sessions, and correction rules
-  still use the compatible file-based MVP paths until later PRs migrate them.
+- Current processing state: a hybrid model. Users, access requests, quota
+  events, and review processing sessions are in SQLite; receipt files and
+  correction rules still use the compatible file-based MVP paths until later
+  PRs migrate them.
 
 ## Source of truth
 
@@ -36,8 +37,8 @@ Files = images, OCR artifacts, debug artifacts, and generated exports
 
 Current implementation status:
 
-- SQLite is already the source of truth for users, access requests, and quota
-  usage events.
+- SQLite is already the source of truth for users, access requests, quota usage
+  events, and active review processing sessions.
 - SQLite schema already includes planned tables for documents, items, files,
   processing sessions, usage events, correction rules, magic links, and web
   sessions.
@@ -53,7 +54,9 @@ Current receipt flow:
 ```text
 Telegram photo
 -> access and quota checks
--> download image into user vault _tmp path
+-> block if another review/correction session is active
+-> create SQLite processing session and temp dir under data/tmp/processing
+-> download image into data/tmp/processing/<session_id>/
 -> Google Cloud Vision OCR with language hints hy, ru, en
 -> deterministic CLEAN OCR
 -> OpenAI structured JSON
@@ -93,8 +96,10 @@ Telegram photo or /order caption
 - `app/receipts/` - document type classification, receipt/order models, legacy
   receipt listing helpers.
 - `app/obsidian/` - Markdown writer and manifest-based deletion fallback.
-- `app/storage/` - path safety helpers, normalization, file sessions, correction
-  store.
+- `app/storage/` - path safety helpers, normalization, session temp storage,
+  and correction store.
+- `app/storage/sessions.py` - SQLite-backed processing session store and temp
+  cleanup for Telegram review state.
 
 ## Storage model
 
@@ -115,14 +120,17 @@ Current persistent files:
 - `Users/<telegram_user_id>/OCR_VERIFIED/YYYY/MM/<file>.verified.hy.txt`
 - `Users/<telegram_user_id>/MANIFEST/receipts/YYYY/MM/<file>.manifest.json`
 - `Users/<telegram_user_id>/DEBUG/openai/...` only for invalid OpenAI JSON
-- `data/app.db` for users, access requests, and `usage_events`
-- `data/sessions/` for review sessions
+- `data/app.db` for users, access requests, `usage_events`, and
+  `processing_sessions`
+- `data/tmp/processing/<session_id>/` for temporary image/OCR files during
+  active processing
 - `data/corrections.json` for scoped correction rules
 
 Target storage direction:
 
 - Keep only value-bearing files permanently.
-- Move temporary processing files into `data/tmp/<document_id>/`.
+- Temporary processing files now live under `data/tmp/processing/<session_id>/`;
+  PR5 may later connect them to document ids.
 - Store canonical document data, items, files, sessions, quotas, and correction
   rules in SQLite.
 - Obsidian exports should be generated from SQLite/parsed JSON, not used as the
@@ -158,6 +166,15 @@ Current quotas:
 - Usage events store the role snapshot in `metadata_json` and the final
   `document_type` when automatic classification happens after OCR.
 - Legacy JSON counters in `data/usage` are not imported and are cleaned up.
+
+Current review sessions:
+
+- Active Telegram review/correction sessions are stored in SQLite
+  `processing_sessions`.
+- Waiting review/correction sessions are restored after restart.
+- Stale OCR/OpenAI processing states are marked failed on startup and their
+  temp files are cleaned.
+- Legacy `data/sessions/*.json` is not imported.
 
 Future web authorization:
 
@@ -199,13 +216,10 @@ Future web authorization:
 
 - Receipt documents are not yet persisted through DB repositories despite the
   schema existing.
-- `document_items`, `document_files`, `processing_sessions`,
-  `correction_rules`, `magic_links`, and `web_sessions` are schema-level
-  foundations, not fully wired into runtime logic yet.
-- Review sessions are still file-based in `data/sessions`.
+- `document_items`, `document_files`, `correction_rules`, `magic_links`, and
+  `web_sessions` are schema-level foundations, not fully wired into runtime
+  logic yet.
 - Correction rules are still stored in `data/corrections.json`.
-- Temporary image/OCR files are still placed under the Obsidian vault `_tmp`
-  path during processing.
 - Obsidian export still includes `OCR_VERIFIED` even though manual review is now
   on Russian fields, not Armenian OCR.
 - PWA/API does not exist yet.
@@ -228,6 +242,7 @@ Current tests cover:
 - JSON parsing and receipt detection;
 - Markdown rendering;
 - deletion path safety;
+- SQLite-backed processing sessions and temp cleanup;
 - correction rules;
 - order document parsing/review behavior;
 - user-scoped receipt listing.

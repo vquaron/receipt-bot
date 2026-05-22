@@ -6,10 +6,10 @@ from telegram.ext import ContextTypes
 
 from app.config import Settings
 from app.receipts.repository import ReceiptRepository
-from app.review.models import ReceiptSession
+from app.review.models import ReceiptSession, SessionState
 from app.security.access_control import AccessControl
 from app.storage.corrections import CorrectionStore
-from app.storage.sessions import SessionStore
+from app.storage.sessions import SessionStorageError, SessionStore
 from app.users.quotas import QuotaService
 
 
@@ -58,9 +58,17 @@ def save_session(session: ReceiptSession, context: ContextTypes.DEFAULT_TYPE) ->
     sessions(context).save(session)
 
 
-def delete_session(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+def delete_session(
+    user_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    final_state: SessionState = SessionState.CANCELLED,
+) -> None:
     SESSIONS.pop(user_id, None)
-    sessions(context).delete(user_id)
+    try:
+        sessions(context).finish(user_id, final_state)
+    except SessionStorageError:
+        LOGGER.exception("Failed to finalize processing session user_id=%s state=%s", user_id, final_state.value)
 
 
 def settings(context: ContextTypes.DEFAULT_TYPE) -> Settings:
@@ -85,4 +93,3 @@ def quotas(context: ContextTypes.DEFAULT_TYPE) -> QuotaService:
 
 def receipts(context: ContextTypes.DEFAULT_TYPE) -> ReceiptRepository:
     return context.application.bot_data["receipt_repository"]
-
