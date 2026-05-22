@@ -41,10 +41,11 @@ from app.telegram.handlers.common import (
     quotas,
     save_session,
     send_text_chunks,
+    sessions,
     settings,
 )
+from app.storage.sessions import SessionStorageError, session_temp_dir
 from app.users.quotas import QuotaStorageError
-from app.users.paths import user_dated_relpath
 
 
 LOGGER = logging.getLogger(__name__)
@@ -70,6 +71,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     user_id = update.effective_user.id
+    if _has_active_session(user_id):
+        await update.message.reply_text("У вас уже есть активная обработка. Подтвердите или отмените текущую сессию.")
+        return
+
     document_type, explicit_document_type = _consume_document_type(update, context)
     document_genitive = document_genitive_ru(document_type)
     document_prepositional = document_prepositional_ru(document_type)
@@ -86,21 +91,37 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     app_settings = settings(context)
     created_at = datetime.now()
+    session_id = uuid4().hex
     temporary_base_name = f"{created_at:%Y%m%d_%H%M%S}_{uuid4().hex[:8]}"
-    image_path = app_settings.obsidian_vault / user_dated_relpath(
-        app_settings,
-        user_id,
-        "Attachments/receipts/_tmp",
-        created_at,
-        f"{temporary_base_name}.jpg",
+    temp_dir = session_temp_dir(app_settings, session_id)
+    image_path = temp_dir / "original.jpg"
+    clean_ocr_path = temp_dir / "clean.hy.txt"
+    source_ocr_path = temp_dir / "source.hy.txt"
+    session = ReceiptSession(
+        session_id=session_id,
+        user_id=user_id,
+        image_path=image_path,
+        clean_ocr_path=clean_ocr_path,
+        source_ocr_path=source_ocr_path,
+        temporary_base_name=temporary_base_name,
+        created_at=created_at,
+        document_type=document_type,
+        state=SessionState.PROCESSING_OCR,
     )
-    image_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        save_session(session, context)
+    except SessionStorageError:
+        sessions(context).cleanup_session_temp(session_id)
+        LOGGER.exception("Failed to persist processing session before download user_id=%s", user_id)
+        await update.message.reply_text("Не удалось создать сессию обработки. Попробуйте позже.")
+        return
 
     try:
         telegram_file = await update.message.photo[-1].get_file()
         await telegram_file.download_to_drive(custom_path=image_path)
     except OSError:
         LOGGER.exception("Failed to save Telegram photo for user_id=%s", user_id)
+        delete_session(user_id, context, final_state=SessionState.FAILED)
         if explicit_document_type:
             await update.message.reply_text(f"Не удалось сохранить изображение {document_genitive}.")
         else:
@@ -115,22 +136,27 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         _raw_ocr, clean_ocr = await asyncio.to_thread(run_ocr, image_path)
     except GoogleVisionCredentialsError:
         LOGGER.exception("Google Vision ADC credentials are missing.")
+        delete_session(user_id, context, final_state=SessionState.FAILED)
         await update.message.reply_text("Не найдены Google ADC credentials.")
         return
     except GoogleVisionNetworkError:
         LOGGER.exception("Google Vision network error.")
+        delete_session(user_id, context, final_state=SessionState.FAILED)
         await update.message.reply_text("Не удалось подключиться к Google Vision API.")
         return
     except GoogleVisionError:
         LOGGER.exception("Google Vision returned an error.")
+        delete_session(user_id, context, final_state=SessionState.FAILED)
         await update.message.reply_text("Google Vision не смог обработать изображение.")
         return
     except Exception:
         LOGGER.exception("Unexpected OCR failure.")
+        delete_session(user_id, context, final_state=SessionState.FAILED)
         await update.message.reply_text("Не удалось выполнить OCR.")
         return
 
     if not clean_ocr:
+        delete_session(user_id, context, final_state=SessionState.FAILED)
         if explicit_document_type:
             await update.message.reply_text(f"Не удалось распознать текст на {document_prepositional}. OpenAI не вызывался.")
         else:
@@ -161,40 +187,24 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             classification.order_score,
         )
 
-    clean_ocr_path = app_settings.obsidian_vault / user_dated_relpath(
-        app_settings,
-        user_id,
-        "OCR",
-        created_at,
-        f"{temporary_base_name}.clean.hy.txt",
-    )
-    source_ocr_path = app_settings.obsidian_vault / user_dated_relpath(
-        app_settings,
-        user_id,
-        "OCR_VERIFIED",
-        created_at,
-        f"{temporary_base_name}.verified.hy.txt",
-    )
     try:
-        clean_ocr_path.parent.mkdir(parents=True, exist_ok=True)
-        source_ocr_path.parent.mkdir(parents=True, exist_ok=True)
         clean_ocr_path.write_text(clean_ocr, encoding="utf-8")
         source_ocr_path.write_text(clean_ocr, encoding="utf-8")
     except OSError:
         LOGGER.exception("Failed to write OCR files for user_id=%s", user_id)
+        delete_session(user_id, context, final_state=SessionState.FAILED)
         await update.message.reply_text("Не удалось сохранить OCR для обработки.")
         return
 
-    session = ReceiptSession(
-        user_id=user_id,
-        image_path=image_path,
-        clean_ocr_path=clean_ocr_path,
-        source_ocr_path=source_ocr_path,
-        temporary_base_name=temporary_base_name,
-        created_at=created_at,
-        document_type=document_type,
-    )
-    save_session(session, context)
+    session.document_type = document_type
+    session.state = SessionState.PROCESSING_OPENAI
+    try:
+        save_session(session, context)
+    except SessionStorageError:
+        LOGGER.exception("Failed to persist processing session after OCR user_id=%s", user_id)
+        delete_session(user_id, context, final_state=SessionState.FAILED)
+        await update.message.reply_text("Не удалось сохранить сессию обработки.")
+        return
 
     await update.message.reply_photo(photo=image_path)
     await update.message.reply_text(f"OCR готов. Извлекаю поля {document_genitive} через OpenAI...")
@@ -214,7 +224,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.message.reply_text("Нет активной обработки чека.")
         return
     if query.data == "review_cancel":
-        delete_session(session.user_id, context)
+        delete_session(session.user_id, context, final_state=SessionState.CANCELLED)
         await query.message.reply_text("Обработка отменена")
         return
     if session.state != SessionState.WAITING_FOR_RUSSIAN_REVIEW:
@@ -225,7 +235,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.message.reply_text("Нет полей заметки для исправления.")
             return
         session.state = SessionState.WAITING_FOR_CORRECTED_REVIEW
-        save_session(session, context)
+        try:
+            save_session(session, context)
+        except SessionStorageError:
+            LOGGER.exception("Failed to persist corrected-review state user_id=%s", session.user_id)
+            await query.message.reply_text("Не удалось сохранить состояние проверки. Попробуйте позже.")
+            return
         await query.message.reply_text("Отправьте исправленный JSON. Меняйте только значения.")
         await send_text_chunks(query.message, review_payload_json(session.parsed_receipt))
         return
@@ -257,7 +272,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         corrected = merge_review_payload(session.parsed_receipt, payload)
         learned_count = corrections(context).learn(session.parsed_receipt, corrected)
         session.parsed_receipt = corrected
-        save_session(session, context)
+        try:
+            save_session(session, context)
+        except SessionStorageError:
+            LOGGER.exception("Failed to persist corrected review payload user_id=%s", session.user_id)
+            await update.message.reply_text("Не удалось сохранить исправления. Попробуйте позже.")
+            return
         await update.message.reply_text(f"Исправления приняты. Новых правил замен: {learned_count}.")
         await create_note_from_review(session, update.message, context)
         return
@@ -293,25 +313,28 @@ async def process_openai_for_review(session: ReceiptSession, reply_target, conte
     except OpenAIInvalidJSONError as exc:
         LOGGER.exception("OpenAI returned invalid JSON.")
         await asyncio.to_thread(write_openai_debug_file, app_settings, session, exc.raw_response)
-        session.state = SessionState.DONE
-        save_session(session, context)
+        delete_session(session.user_id, context, final_state=SessionState.FAILED)
         await reply_target.reply_text("OpenAI вернул невалидный JSON. Markdown-заметка не создана.")
         return
     except OpenAIQuotaError:
         LOGGER.exception("OpenAI quota is exhausted.")
-        session.state = SessionState.DONE
-        save_session(session, context)
+        delete_session(session.user_id, context, final_state=SessionState.FAILED)
         await reply_target.reply_text("OpenAI не обработал чек: закончилась квота или не настроен billing.")
         return
     except Exception:
         LOGGER.exception("OpenAI request failed.")
-        session.state = SessionState.DONE
-        save_session(session, context)
+        delete_session(session.user_id, context, final_state=SessionState.FAILED)
         await reply_target.reply_text("Не удалось обработать OCR через OpenAI.")
         return
     session.parsed_receipt = parsed.data
     session.state = SessionState.WAITING_FOR_RUSSIAN_REVIEW
-    save_session(session, context)
+    try:
+        save_session(session, context)
+    except SessionStorageError:
+        LOGGER.exception("Failed to persist review session user_id=%s", session.user_id)
+        delete_session(session.user_id, context, final_state=SessionState.FAILED)
+        await reply_target.reply_text("Не удалось сохранить сессию проверки.")
+        return
     await send_text_chunks(reply_target, render_review_text(parsed.data), reply_markup=review_keyboard())
 
 
@@ -323,12 +346,10 @@ async def create_note_from_review(session: ReceiptSession, reply_target, context
         artifact = await asyncio.to_thread(write_receipt_note, settings(context), session, session.parsed_receipt)
     except Exception:
         LOGGER.exception("Unexpected note generation failure.")
-        session.state = SessionState.DONE
-        save_session(session, context)
+        delete_session(session.user_id, context, final_state=SessionState.FAILED)
         await reply_target.reply_text("Не удалось создать Markdown-заметку.")
         return
-    session.state = SessionState.DONE
-    delete_session(session.user_id, context)
+    delete_session(session.user_id, context, final_state=SessionState.DONE)
     await reply_target.reply_text(
         "\n".join(
             [
@@ -361,3 +382,10 @@ def _consume_document_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         queued = context.user_data.pop(NEXT_DOCUMENT_TYPE_KEY)
         return normalize_document_type(queued), True
     return DOCUMENT_TYPE_RECEIPT, False
+
+
+def _has_active_session(user_id: int) -> bool:
+    session = SESSIONS.get(user_id)
+    if session is None:
+        return False
+    return session.state not in {SessionState.DONE, SessionState.CANCELLED, SessionState.FAILED}

@@ -36,6 +36,7 @@ class Settings:
     tmp_storage_dir: Path = Path("data/tmp")
     export_storage_dir: Path = Path("data/exports")
     debug_storage_dir: Path = Path("data/debug")
+    storage_retention_tmp_hours: int = 24
 
     def __post_init__(self) -> None:
         data_dir = _absolute_path(self.data_dir)
@@ -104,6 +105,7 @@ def load_settings() -> Settings:
         tmp_storage_dir=_path("TMP_STORAGE_DIR", env_file_values, data_dir / "tmp"),
         export_storage_dir=_path("EXPORT_STORAGE_DIR", env_file_values, data_dir / "exports"),
         debug_storage_dir=_path("DEBUG_STORAGE_DIR", env_file_values, data_dir / "debug"),
+        storage_retention_tmp_hours=_int("STORAGE_RETENTION_TMP_HOURS", env_file_values, 24),
     )
 
 

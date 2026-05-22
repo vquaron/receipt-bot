@@ -75,6 +75,30 @@ schema version, prompt version, and processing session state.
 **Review trigger:** Revisit when storage pressure requires a stricter retention
 policy for OCR/debug artifacts.
 
+### 2026-05-22 - SQLite processing sessions and temp outside vault
+
+**Status:** active
+**Decision:** Active Telegram review/correction sessions are stored in SQLite
+`processing_sessions`, while temporary image/OCR files live under
+`data/tmp/processing/<session_id>/` instead of the Obsidian vault.
+**Context:** File sessions in `data/sessions` and vault `_tmp` files made
+restart recovery and cleanup weaker, and placed temporary private artifacts in
+the human-readable export tree.
+**Reason:** SQLite sessions make review state durable and queryable without
+turning Markdown/manifest files back into application state. Keeping temp files
+outside Obsidian prevents temporary processing artifacts from syncing as archive
+data.
+**Alternatives considered:** Continue using `data/sessions`; migrate legacy
+sessions automatically; keep temp files under vault `_tmp`. JSON sessions are
+less reliable for the DB-first model; legacy sessions are transient enough to
+ignore; vault temp files are noisy and easy to leak through sync.
+**Impact:** New photo handling blocks if a waiting review/correction session is
+active, before quota/download/OCR/OpenAI. Waiting review/correction sessions are
+restored after restart; stale OCR/OpenAI sessions are marked failed and cleaned.
+Legacy `data/sessions/*.json` is not imported.
+**Review trigger:** Revisit if the project later adds resumable background
+processing or multi-session review UX.
+
 ### 2026-05-21 - Telegram as current review UI
 
 **Status:** active  
