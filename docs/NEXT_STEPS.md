@@ -2,14 +2,20 @@
 
 ## Immediate next steps
 
-- [ ] PR7: implement file retention and exports/debug cleanup.
-  - Context: Canonical images now have generic local/S3 storage references and
-    new documents create both `original_image` and `stored_image`. `data/exports`
-    and debug files can still grow.
-  - Expected outcome: clean old export ZIPs and debug artifacts safely, move new
-    OpenAI debug output out of Obsidian vault, and define local cache retention
-    for materialized S3 objects.
-  - Depends on: generic `document_files` storage refs.
+- [ ] PR8: add storage health checks and optional repair/backfill tooling.
+  - Context: Canonical images can now live in local storage or private S3/B2,
+    while file metadata lives in SQLite `document_files`.
+  - Expected outcome: report missing local/S3/vault files, checksum/size drift
+    where practical, invalid storage refs, `storage_failed` documents, and
+    orphaned local app-storage files. Any repair/backfill must be dry-run-first.
+  - Depends on: generic `document_files` storage refs and PR7 retention cleanup.
+
+- [ ] PR9: move runtime correction rules from `data/corrections.json` to SQLite
+  `correction_rules`.
+  - Context: The schema exists, but runtime learning still writes JSON.
+  - Expected outcome: scoped correction rules become DB-first with safe import
+    or explicit migration tooling.
+  - Depends on: current correction store behavior and DB foundation.
 
 - [ ] Keep docs context updated after every substantial PR.
   - Context: `docs/` now acts as persistent project memory.
@@ -26,14 +32,12 @@
     new DB documents. Production may store both in private S3/B2; local/dev uses
     `APP_STORAGE_DIR`.
 
-- [ ] Should `OCR_VERIFIED` continue as a permanent file?
+- [x] Should `OCR_VERIFIED` continue as a permanent file?
   - Context: Manual review now happens on Russian fields, not Armenian OCR, so
     permanent `OCR_VERIFIED` may be a misleading duplicate.
-  - Options: Remove by default; keep for compatibility; store OCR text/hash only
-    in SQLite; make retention configurable.
-  - Current leaning: Stop creating `OCR_VERIFIED` by default after DB-backed
-    documents and processing stages are implemented.
-  - Needed to decide: Define DB fields and retention for OCR stages.
+  - Decision: `OCR_VERIFIED` remains a legacy Obsidian artifact only. New
+    DB-first documents do not create permanent `OCR_VERIFIED`; canonical OCR
+    lives in app storage and SQLite `document_files`.
 
 - [ ] What should the first PWA/API include?
   - Context: PWA/API should consume SQLite, not Markdown.
@@ -46,26 +50,14 @@
 
 ## Backlog
 
-- [ ] Move correction rules from `data/corrections.json` to SQLite
-  `correction_rules`.
-  - Why it matters: Rules need scoped uniqueness, usage counts, future editing,
-    and safer application.
-  - Priority: high
-
-- [ ] Add cleanup for `data/exports` and debug retention.
-  - Why it matters: Storage cost and stale sensitive files will grow otherwise.
-  - Priority: medium
-
-- [ ] Add magic-link `/web` flow and minimal web session repository.
+- [ ] PR10: add magic-link `/web` flow and read-only API/PWA MVP.
   - Why it matters: This is the likely bridge to mobile PWA.
+  - Expected outcome: Telegram `/web` creates a short-lived magic link;
+    `magic_links` and `web_sessions` become runtime-backed; API/PWA supports
+    receipt list, detail, items, and image access through DB/document files.
   - Priority: medium
 
-- [ ] Add read-only API/PWA after DB-backed documents exist.
-  - Why it matters: It makes receipts usable on mobile without relying on
-    Obsidian sync.
-  - Priority: medium
-
-- [ ] Add FTS/search for merchants, summaries, and item names.
+- [ ] PR11: add FTS/search for merchants, summaries, and item names.
   - Why it matters: Search and analytics become valuable once many receipts are
     stored.
   - Priority: low
@@ -91,5 +83,4 @@
 - Admin dashboard or PWA controls for correction rules.
 - SQLite FTS5 for item and merchant search.
 - Audit log for access decisions, deletions, exports, and web logins.
-- Health check for DB/export drift: missing files, orphan files, manifest
-  mismatch.
+- Legacy receipt migration from manifest files into SQLite if needed.

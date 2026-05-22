@@ -13,6 +13,7 @@ from app.db import initialize_database
 from app.receipts.repository import ReceiptRepository
 from app.security.access_control import AccessControl
 from app.storage.corrections import CorrectionStore
+from app.storage.retention import cleanup_runtime_storage
 from app.storage.sessions import SessionStore
 from app.telegram.handlers.access import (
     access_command,
@@ -61,6 +62,7 @@ def main() -> None:
 
 def build_application(settings: Settings) -> Application:
     session_store = SessionStore(settings)
+    cleanup_runtime_storage(settings)
     init_sessions(session_store)
 
     application = Application.builder().token(settings.telegram_bot_token).build()

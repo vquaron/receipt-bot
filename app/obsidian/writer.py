@@ -173,14 +173,15 @@ def export_receipt_note(
 
 
 def write_openai_debug_file(settings: Settings, session: ReceiptSession, raw_response: str) -> Path:
-    debug_rel = user_dated_relpath(
-        settings,
-        session.user_id,
-        "DEBUG/openai",
-        session.created_at,
-        f"{session.temporary_base_name}.openai.raw.txt",
+    debug_name = f"{_safe_debug_base_name(session.temporary_base_name)}.openai.raw.txt"
+    debug_path = (
+        settings.debug_storage_dir
+        / "openai"
+        / str(session.user_id)
+        / f"{session.created_at:%Y}"
+        / f"{session.created_at:%m}"
+        / debug_name
     )
-    debug_path = settings.obsidian_vault / debug_rel
     ensure_parent(debug_path)
     debug_path.write_text(raw_response, encoding="utf-8")
     return debug_path
@@ -316,6 +317,11 @@ def _normalized_possible_errors(value: object) -> list[str]:
         if compact:
             result.append(compact[:180])
     return result[:8]
+
+
+def _safe_debug_base_name(value: str) -> str:
+    cleaned = value.replace("/", "_").replace("\\", "_").strip(" .")
+    return cleaned or "openai"
 
 
 def _cell(value: str) -> str:

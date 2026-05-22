@@ -103,7 +103,7 @@ Telegram photo or /order caption
   receipt listing helpers.
 - `app/obsidian/` - Markdown writer and manifest-based deletion fallback.
 - `app/storage/` - path safety helpers, normalization, session temp storage,
-  and correction store.
+  runtime retention cleanup, and correction store.
 - `app/storage/sessions.py` - SQLite-backed processing session store and temp
   cleanup for Telegram review state.
 
@@ -114,8 +114,8 @@ Configured storage:
 - `DATABASE_URL`, default `sqlite:///data/app.db`.
 - `DATA_DIR`, default `data`.
 - `APP_STORAGE_DIR`, `TMP_STORAGE_DIR`, `EXPORT_STORAGE_DIR`, `DEBUG_STORAGE_DIR`,
-  and S3-compatible image storage settings are configured but not fully used by
-  all pipelines yet.
+  runtime retention settings, and S3-compatible image storage settings are used
+  by the current storage pipelines.
 - `OBSIDIAN_VAULT` points to the local/synced vault used for human-readable
   exports.
 
@@ -129,7 +129,10 @@ Current persistent files:
   legacy manifest-backed receipts only
 - `Users/<telegram_user_id>/MANIFEST/receipts/YYYY/MM/<file>.manifest.json` for
   legacy manifest-backed receipts only
-- `Users/<telegram_user_id>/DEBUG/openai/...` only for invalid OpenAI JSON
+- `data/debug/openai/<telegram_user_id>/YYYY/MM/...` only for invalid OpenAI
+  JSON
+- `data/exports/<telegram_user_id>/receipts_YYYYMMDD_HHMMSS.zip` for user ZIP
+  exports
 - `data/app.db` for users, access requests, `usage_events`,
   `processing_sessions`, `documents`, `document_items`, and `document_files`
 - `data/storage/documents/<document_id>/original.jpg` when the image backend is
@@ -142,6 +145,8 @@ Current persistent files:
 - `data/storage/documents/<document_id>/source.hy.txt`
 - `data/tmp/processing/<session_id>/` for temporary image/OCR files during
   active processing
+- `data/tmp/materialized/`, `data/tmp/exports/`, and `data/tmp/telegram/` for
+  short-lived materialized/cache files
 - `data/corrections.json` for scoped correction rules
 
 Target storage direction:
@@ -155,6 +160,9 @@ Target storage direction:
   main data source.
 - Original receipt images must be preserved unless a later explicit decision
   changes the file retention policy.
+- Runtime cleanup removes old export ZIPs, debug artifacts, and materialized
+  temp/cache files according to retention settings; it does not delete canonical
+  document files.
 - Processing stages are valuable: keep enough state to audit OCR, LLM parsing,
   review payloads, user corrections, and export status.
 
@@ -220,6 +228,8 @@ Current documents:
   user and regenerates the Obsidian export.
 - `/export_receipts` includes readable Obsidian files plus canonical DB files
   under `Canonical/<receipt_id>/` in the ZIP archive.
+- OpenAI invalid-JSON debug output is stored under `DEBUG_STORAGE_DIR`, not in
+  the Obsidian vault.
 
 Future web authorization:
 
@@ -264,8 +274,9 @@ Future web authorization:
 - `correction_rules`, `magic_links`, and `web_sessions` are schema-level
   foundations, not fully wired into runtime logic yet.
 - Correction rules are still stored in `data/corrections.json`.
-- Legacy Obsidian exports can include `OCR_VERIFIED`; new DB-first exports store
-  OCR canonically in app storage instead.
+- Legacy Obsidian exports can include `OCR_VERIFIED`; new DB-first exports do
+  not create permanent `OCR_VERIFIED` files and store OCR canonically in app
+  storage instead.
 - PWA/API does not exist yet.
 - No database migration framework beyond the simple in-project migrations module.
 
@@ -291,6 +302,8 @@ Current tests cover:
   manifests;
 - DB-first delete/copy/export with legacy manifest fallback;
 - generic local/S3 image storage references for canonical images;
+- runtime retention cleanup for exports, debug artifacts, and materialized temp
+  files;
 - correction rules;
 - order document parsing/review behavior;
 - user-scoped receipt listing.
