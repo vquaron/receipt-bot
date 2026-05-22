@@ -54,8 +54,8 @@ def split_text(text: str, limit: int = 3500) -> list[str]:
 
 
 def save_session(session: ReceiptSession, context: ContextTypes.DEFAULT_TYPE) -> None:
-    SESSIONS[session.user_id] = session
     sessions(context).save(session)
+    SESSIONS[session.user_id] = session
 
 
 def delete_session(
@@ -64,11 +64,15 @@ def delete_session(
     *,
     final_state: SessionState = SessionState.CANCELLED,
 ) -> None:
-    SESSIONS.pop(user_id, None)
+    in_memory_session = SESSIONS.get(user_id)
     try:
         sessions(context).finish(user_id, final_state)
     except SessionStorageError:
         LOGGER.exception("Failed to finalize processing session user_id=%s state=%s", user_id, final_state.value)
+        if in_memory_session is not None:
+            SESSIONS[user_id] = in_memory_session
+        return
+    SESSIONS.pop(user_id, None)
 
 
 def settings(context: ContextTypes.DEFAULT_TYPE) -> Settings:

@@ -66,6 +66,8 @@ class SessionStore:
             except (KeyError, ValueError, TypeError, json.JSONDecodeError):
                 LOGGER.warning("Skipping invalid processing session user_id=%s", row["telegram_user_id"])
                 continue
+            if session.user_id in sessions:
+                continue
             sessions[session.user_id] = session
         return sessions
 

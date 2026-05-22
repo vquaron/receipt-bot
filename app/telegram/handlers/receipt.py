@@ -41,6 +41,7 @@ from app.telegram.handlers.common import (
     quotas,
     save_session,
     send_text_chunks,
+    sessions,
     settings,
 )
 from app.storage.sessions import SessionStorageError, session_temp_dir
@@ -110,6 +111,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         save_session(session, context)
     except SessionStorageError:
+        sessions(context).cleanup_session_temp(session_id)
         LOGGER.exception("Failed to persist processing session before download user_id=%s", user_id)
         await update.message.reply_text("Не удалось создать сессию обработки. Попробуйте позже.")
         return

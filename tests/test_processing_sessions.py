@@ -11,7 +11,8 @@ import pytest
 from app.config import Settings
 from app.db.connection import connect_database
 from app.review.models import ReceiptSession, SessionState
-from app.storage.sessions import SessionStore, session_temp_dir
+from app.storage.sessions import SessionStorageError, SessionStore, session_temp_dir
+from app.telegram.handlers import common as common_handler
 from app.telegram.handlers import receipt as receipt_handler
 
 
@@ -39,6 +40,20 @@ def test_session_store_persists_and_restores_review_sessions(tmp_path: Path) -> 
     assert restored[session.user_id].session_id == session.session_id
     assert restored[session.user_id].state == SessionState.WAITING_FOR_RUSSIAN_REVIEW
     assert not (app_settings.data_dir / "sessions").exists()
+
+
+def test_session_store_restores_latest_session_per_user(tmp_path: Path) -> None:
+    app_settings = settings(tmp_path)
+    store = SessionStore(app_settings)
+    older = _session_with_identity(app_settings, state=SessionState.WAITING_FOR_RUSSIAN_REVIEW, session_id="older", user_id=333)
+    newer = _session_with_identity(app_settings, state=SessionState.WAITING_FOR_CORRECTED_REVIEW, session_id="newer", user_id=333)
+
+    store.save(older)
+    store.save(newer)
+
+    restored = store.load_all()
+    assert restored[333].session_id == "newer"
+    assert restored[333].state == SessionState.WAITING_FOR_CORRECTED_REVIEW
 
 
 def test_session_store_does_not_restore_final_sessions(tmp_path: Path) -> None:
@@ -157,6 +172,49 @@ def test_active_review_session_blocks_new_photo_before_quota(monkeypatch, tmp_pa
     assert message.texts == ["У вас уже есть активная обработка. Подтвердите или отмените текущую сессию."]
 
 
+def test_save_session_does_not_mutate_memory_when_storage_fails(tmp_path: Path) -> None:
+    app_settings = settings(tmp_path)
+    session = _session_with_identity(
+        app_settings,
+        state=SessionState.WAITING_FOR_RUSSIAN_REVIEW,
+        session_id="save-fails",
+        user_id=444,
+    )
+    common_handler.SESSIONS.clear()
+
+    class _FailingStore:
+        def save(self, _session: ReceiptSession) -> None:
+            raise SessionStorageError("boom")
+
+    context = _context_with_store(_FailingStore())
+
+    with pytest.raises(SessionStorageError):
+        common_handler.save_session(session, context)
+
+    assert 444 not in common_handler.SESSIONS
+
+
+def test_delete_session_keeps_memory_when_storage_fails(tmp_path: Path) -> None:
+    app_settings = settings(tmp_path)
+    session = _session_with_identity(
+        app_settings,
+        state=SessionState.WAITING_FOR_RUSSIAN_REVIEW,
+        session_id="finish-fails",
+        user_id=555,
+    )
+    common_handler.SESSIONS.clear()
+    common_handler.SESSIONS[555] = session
+
+    class _FailingStore:
+        def finish(self, user_id: int, final_state: SessionState) -> None:
+            raise SessionStorageError(f"{user_id}:{final_state.value}")
+
+    context = _context_with_store(_FailingStore())
+    common_handler.delete_session(555, context, final_state=SessionState.CANCELLED)
+
+    assert common_handler.SESSIONS[555] is session
+
+
 class _FakeMessage:
     def __init__(self) -> None:
         self.photo = [object()]
@@ -180,6 +238,30 @@ def _session(app_settings: Settings, *, state: SessionState) -> ReceiptSession:
         state=state,
         session_id=session_id,
     )
+
+
+def _session_with_identity(
+    app_settings: Settings,
+    *,
+    state: SessionState,
+    session_id: str,
+    user_id: int,
+) -> ReceiptSession:
+    temp_dir = app_settings.tmp_storage_dir / "processing" / session_id
+    return ReceiptSession(
+        user_id=user_id,
+        image_path=temp_dir / "original.jpg",
+        clean_ocr_path=temp_dir / "clean.hy.txt",
+        source_ocr_path=temp_dir / "source.hy.txt",
+        temporary_base_name="tmp",
+        created_at=datetime(2026, 5, 22, 12, 0, 0),
+        state=state,
+        session_id=session_id,
+    )
+
+
+def _context_with_store(store):
+    return SimpleNamespace(application=SimpleNamespace(bot_data={"session_store": store}))
 
 
 def _db_state(app_settings: Settings, session_id: str) -> str:
