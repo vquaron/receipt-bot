@@ -2,6 +2,39 @@
 
 ## 2026-05-22
 
+### Move correction rules to SQLite
+
+**Summary:** Moved runtime correction rules from `data/corrections.json` to
+SQLite `correction_rules`.
+**Files changed:**
+
+- `app/storage/corrections.py`
+- `app/telegram/bot.py`
+- `app/telegram/handlers/receipt.py`
+- `tests/test_corrections.py`
+- `tests/test_order_documents.py`
+- `README.md`
+- `docs/PROJECT_STATE.md`
+- `docs/DECISIONS.md`
+- `docs/NEXT_STEPS.md`
+- `docs/TASK_LOG.md`
+
+**Details:**
+
+- `CorrectionStore` now reads and writes SQLite rules for merchant, unit,
+  Russian item name, and original item name mappings.
+- Existing `data/corrections.json` is imported only once when the DB table is
+  empty, then preserved as a legacy artifact.
+- Applying rules increments `usage_count` and updates `last_used_at`; learning
+  rules stores the correcting Telegram user id when available.
+
+**Reason:** Correction rules are structured scoped application data and should
+not remain the last runtime JSON-backed model.
+**Validation:** `./.venv/bin/python -m pytest -q` passed with 112 tests.
+**Follow-ups:** PR10: magic-link auth plus read-only API/PWA MVP.
+**Related decisions:** `2026-05-21 - Correction rules as durable scoped data`;
+`2026-05-21 - SQLite as source of truth`.
+
 ### Add storage safety and health checks
 
 **Summary:** Hardened runtime retention cleanup and added read-only storage

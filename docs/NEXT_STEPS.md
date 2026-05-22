@@ -2,12 +2,13 @@
 
 ## Immediate next steps
 
-- [ ] PR9: move runtime correction rules from `data/corrections.json` to SQLite
-  `correction_rules`.
-  - Context: The schema exists, but runtime learning still writes JSON.
-  - Expected outcome: scoped correction rules become DB-first with safe import
-    or explicit migration tooling.
-  - Depends on: current correction store behavior and DB foundation.
+- [ ] PR10: add magic-link `/web` flow and read-only API/PWA MVP.
+  - Context: SQLite now owns access, quotas, sessions, documents, files, and
+    correction rules. The next product step is a minimal web read surface.
+  - Expected outcome: Telegram `/web` creates a short-lived magic link;
+    `magic_links` and `web_sessions` become runtime-backed; API/PWA supports
+    receipt list, detail, items, and image access through DB/document files.
+  - Depends on: DB-backed documents/files and current storage backend.
 
 - [ ] Keep docs context updated after every substantial PR.
   - Context: `docs/` now acts as persistent project memory.
@@ -45,13 +46,6 @@
 - [ ] Add storage repair/backfill tooling.
   - Why it matters: Health checks now report drift, but repair should remain a
     separate dry-run-first operation.
-  - Priority: medium
-
-- [ ] PR10: add magic-link `/web` flow and read-only API/PWA MVP.
-  - Why it matters: This is the likely bridge to mobile PWA.
-  - Expected outcome: Telegram `/web` creates a short-lived magic link;
-    `magic_links` and `web_sessions` become runtime-backed; API/PWA supports
-    receipt list, detail, items, and image access through DB/document files.
   - Priority: medium
 
 - [ ] PR11: add FTS/search for merchants, summaries, and item names.

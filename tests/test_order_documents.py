@@ -40,7 +40,7 @@ def test_parse_for_review_passes_order_document_type(monkeypatch, tmp_path: Path
     result = receipt_pipeline.parse_for_review(
         "order screenshot OCR",
         settings=_settings(tmp_path),
-        correction_store=CorrectionStore(tmp_path / "data"),
+        correction_store=CorrectionStore(_settings(tmp_path)),
         document_type=DOCUMENT_TYPE_ORDER,
     )
 

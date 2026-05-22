@@ -70,7 +70,7 @@ def build_application(settings: Settings) -> Application:
     application.bot_data["settings"] = settings
     application.bot_data["access_control"] = AccessControl(settings)
     application.bot_data["session_store"] = session_store
-    application.bot_data["correction_store"] = CorrectionStore(settings.data_dir)
+    application.bot_data["correction_store"] = CorrectionStore(settings)
     application.bot_data["quota_service"] = QuotaService(settings)
     application.bot_data["receipt_repository"] = ReceiptRepository(settings)
 

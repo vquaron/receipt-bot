@@ -20,10 +20,9 @@ structured SQLite data rather than parse Markdown.
 - Current DB: SQLite in `data/app.db` with idempotent migrations, WAL, foreign
   keys, and busy timeout.
 - Current human-readable export: Obsidian Markdown in `OBSIDIAN_VAULT`.
-- Current processing state: a hybrid model. Users, access requests, quota
-  events, review processing sessions, and newly confirmed receipt/order
-  documents are in SQLite; correction rules still use compatible file-based MVP
-  paths until later PRs migrate them.
+- Current processing state: users, access requests, quota events, review
+  processing sessions, newly confirmed receipt/order documents, and correction
+  rules are in SQLite.
 
 ## Source of truth
 
@@ -38,8 +37,8 @@ Files = images, OCR artifacts, debug artifacts, and generated exports
 Current implementation status:
 
 - SQLite is already the source of truth for users, access requests, quota usage
-  events, active review processing sessions, and newly confirmed documents,
-  document items, and document files.
+  events, active review processing sessions, newly confirmed documents,
+  document items, document files, and correction rules.
 - SQLite schema already includes planned tables for documents, items, files,
   processing sessions, usage events, correction rules, magic links, and web
   sessions.
@@ -148,7 +147,8 @@ Current persistent files:
   active processing
 - `data/tmp/materialized/`, `data/tmp/exports/`, and `data/tmp/telegram/` for
   short-lived materialized/cache files
-- `data/corrections.json` for scoped correction rules
+- `data/corrections.json` only as a legacy one-time import source for correction
+  rules when the SQLite table is empty
 
 Target storage direction:
 
@@ -235,6 +235,16 @@ Current documents:
   storage issues from SQLite `documents` / `document_files`, local/vault files,
   and S3 object metadata without repairing or deleting canonical data.
 
+Current correction rules:
+
+- Runtime correction rules are stored in SQLite `correction_rules`.
+- `CorrectionStore.apply()` reads SQLite rules and updates `usage_count` /
+  `last_used_at` when a rule actually changes a value.
+- `CorrectionStore.learn()` writes scoped rules for merchant, unit, Russian item
+  name, and original item name mappings.
+- `data/corrections.json` is imported only once when `correction_rules` is
+  empty, then ignored as runtime storage.
+
 Future web authorization:
 
 - `magic_links` and `web_sessions` tables exist in the schema for PWA login.
@@ -275,9 +285,8 @@ Future web authorization:
 
 ## Current limitations
 
-- `correction_rules`, `magic_links`, and `web_sessions` are schema-level
-  foundations, not fully wired into runtime logic yet.
-- Correction rules are still stored in `data/corrections.json`.
+- `magic_links` and `web_sessions` are schema-level foundations, not fully wired
+  into runtime logic yet.
 - Legacy Obsidian exports can include `OCR_VERIFIED`; new DB-first exports do
   not create permanent `OCR_VERIFIED` files and store OCR canonically in app
   storage instead.
