@@ -7,8 +7,9 @@ from datetime import datetime
 from pathlib import Path
 
 from app.config import Settings
+from app.repositories.documents import DocumentRepository
 from app.receipts.document_types import normalize_document_type
-from app.receipts.models import ReceiptRecord
+from app.receipts.models import ReceiptFileRecord, ReceiptRecord
 from app.storage.paths import ensure_parent, next_available_stem, safe_vault_path
 from app.users.paths import user_root_rel
 
@@ -17,18 +18,25 @@ class ReceiptRepository:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.vault = settings.obsidian_vault
+        self.documents = DocumentRepository(settings)
 
     def list_user_receipts(self, user_id: int) -> list[ReceiptRecord]:
         root = self.vault / user_root_rel(self.settings, user_id) / "MANIFEST" / "receipts"
-        records = [record for path in root.glob("**/*.manifest.json") if (record := self._read_record(path))]
+        records = self.documents.list_user_documents(user_id)
+        records.extend(record for path in root.glob("**/*.manifest.json") if (record := self._read_record(path)))
         return sorted(records, key=lambda record: (record.date, record.created_at, record.receipt_id), reverse=True)
 
     def find_user_receipt(self, user_id: int, query: str) -> ReceiptRecord | None:
         cleaned = query.strip().strip('"').strip("'")
         if not cleaned:
             return None
+        db_record = self.documents.get_user_document(user_id, cleaned)
+        if db_record is not None:
+            return db_record
         cleaned_stem = Path(cleaned).stem
         for record in self.list_user_receipts(user_id):
+            if record.source == "db":
+                continue
             if cleaned in {record.receipt_id, record.note_rel.as_posix(), record.note_rel.name}:
                 return record
             if cleaned_stem in {record.receipt_id, record.note_rel.stem}:
@@ -46,6 +54,9 @@ class ReceiptRepository:
             if cleaned_stem in {record.receipt_id, record.note_rel.stem}:
                 return record
         return None
+
+    def file_path(self, file_record: ReceiptFileRecord) -> Path:
+        return self.documents.file_path(file_record)
 
     def copy_receipt_to_user(self, query: str, target_user_id: int) -> ReceiptRecord:
         source = self.find_any_receipt(query)
@@ -169,6 +180,7 @@ class ReceiptRepository:
             created_at=str(manifest.get("created_at", "")),
             files=files,
             document_type=normalize_document_type(manifest.get("document_type", "receipt")),
+            file_records=tuple(ReceiptFileRecord(kind="legacy", path=path, storage="vault") for path in files),
         )
 
 

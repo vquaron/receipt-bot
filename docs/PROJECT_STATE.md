@@ -21,9 +21,9 @@ structured SQLite data rather than parse Markdown.
   keys, and busy timeout.
 - Current human-readable export: Obsidian Markdown in `OBSIDIAN_VAULT`.
 - Current processing state: a hybrid model. Users, access requests, quota
-  events, and review processing sessions are in SQLite; receipt files and
-  correction rules still use the compatible file-based MVP paths until later
-  PRs migrate them.
+  events, review processing sessions, and newly confirmed receipt/order
+  documents are in SQLite; correction rules and some legacy receipt commands
+  still use compatible file-based MVP paths until later PRs migrate them.
 
 ## Source of truth
 
@@ -38,14 +38,16 @@ Files = images, OCR artifacts, debug artifacts, and generated exports
 Current implementation status:
 
 - SQLite is already the source of truth for users, access requests, quota usage
-  events, and active review processing sessions.
+  events, active review processing sessions, and newly confirmed documents,
+  document items, and document files.
 - SQLite schema already includes planned tables for documents, items, files,
   processing sessions, usage events, correction rules, magic links, and web
   sessions.
-- Receipt document creation still writes directly to Obsidian-compatible files
-  and manifest JSON. Migrating document persistence to SQLite is a next step.
+- Confirmed review creates DB rows first, stores canonical image/OCR files under
+  app storage, and generates Obsidian Markdown as an export artifact.
 - Existing Markdown/manifest files remain operational artifacts and fallback
-  data for old receipts, but future application logic should be DB-first.
+  data for old receipts, but new manifest JSON files are no longer created by
+  the confirm flow.
 
 ## Current data flow
 
@@ -62,7 +64,8 @@ Telegram photo
 -> OpenAI structured JSON
 -> Russian field review in Telegram
 -> user confirm / JSON correction / cancel
--> Obsidian Markdown note + image + OCR files + manifest
+-> SQLite documents/items/files + canonical files in data/storage/documents/<document_id>/
+-> Obsidian Markdown note + exported image
 ```
 
 Important product rule: manual review is performed on Russian fields that will
@@ -116,12 +119,18 @@ Current persistent files:
 
 - `Users/<telegram_user_id>/Receipts/YYYY/MM/<file>.md`
 - `Users/<telegram_user_id>/Attachments/receipts/YYYY/MM/<file>.jpg`
-- `Users/<telegram_user_id>/OCR/YYYY/MM/<file>.clean.hy.txt`
-- `Users/<telegram_user_id>/OCR_VERIFIED/YYYY/MM/<file>.verified.hy.txt`
-- `Users/<telegram_user_id>/MANIFEST/receipts/YYYY/MM/<file>.manifest.json`
+- `Users/<telegram_user_id>/OCR/YYYY/MM/<file>.clean.hy.txt` for legacy
+  manifest-backed receipts only
+- `Users/<telegram_user_id>/OCR_VERIFIED/YYYY/MM/<file>.verified.hy.txt` for
+  legacy manifest-backed receipts only
+- `Users/<telegram_user_id>/MANIFEST/receipts/YYYY/MM/<file>.manifest.json` for
+  legacy manifest-backed receipts only
 - `Users/<telegram_user_id>/DEBUG/openai/...` only for invalid OpenAI JSON
-- `data/app.db` for users, access requests, `usage_events`, and
-  `processing_sessions`
+- `data/app.db` for users, access requests, `usage_events`,
+  `processing_sessions`, `documents`, `document_items`, and `document_files`
+- `data/storage/documents/<document_id>/original.jpg`
+- `data/storage/documents/<document_id>/clean.hy.txt`
+- `data/storage/documents/<document_id>/source.hy.txt`
 - `data/tmp/processing/<session_id>/` for temporary image/OCR files during
   active processing
 - `data/corrections.json` for scoped correction rules
@@ -129,8 +138,8 @@ Current persistent files:
 Target storage direction:
 
 - Keep only value-bearing files permanently.
-- Temporary processing files now live under `data/tmp/processing/<session_id>/`;
-  PR5 may later connect them to document ids.
+- Temporary processing files now live under `data/tmp/processing/<session_id>/`
+  and are moved into canonical app storage when review is confirmed.
 - Store canonical document data, items, files, sessions, quotas, and correction
   rules in SQLite.
 - Obsidian exports should be generated from SQLite/parsed JSON, not used as the
@@ -176,6 +185,21 @@ Current review sessions:
   temp files are cleaned.
 - Legacy `data/sessions/*.json` is not imported.
 
+Current documents:
+
+- Confirmed Telegram review creates `documents`, `document_items`, and
+  `document_files` rows.
+- `documents.parsed_json` stores the final normalized JSON accepted by review.
+- `documents.review_payload_json` stores the Russian review payload shown to or
+  accepted from the user.
+- `documents.possible_errors_json` stores review-visible possible OCR/parser
+  errors.
+- Canonical image/OCR files live under `data/storage/documents/<document_id>/`.
+- Obsidian Markdown and its exported attachment are recorded as export files in
+  `document_files`.
+- New manifest JSON files are not created; manifest parsing remains a fallback
+  for old receipts.
+
 Future web authorization:
 
 - `magic_links` and `web_sessions` tables exist in the schema for PWA login.
@@ -214,14 +238,13 @@ Future web authorization:
 
 ## Current limitations
 
-- Receipt documents are not yet persisted through DB repositories despite the
-  schema existing.
-- `document_items`, `document_files`, `correction_rules`, `magic_links`, and
-  `web_sessions` are schema-level foundations, not fully wired into runtime
-  logic yet.
+- `/delete_receipt`, `/grant_receipt`, and `/export_receipts` still use legacy
+  manifest/file behavior and are not fully DB-first.
+- `correction_rules`, `magic_links`, and `web_sessions` are schema-level
+  foundations, not fully wired into runtime logic yet.
 - Correction rules are still stored in `data/corrections.json`.
-- Obsidian export still includes `OCR_VERIFIED` even though manual review is now
-  on Russian fields, not Armenian OCR.
+- Legacy Obsidian exports can include `OCR_VERIFIED`; new DB-first exports store
+  OCR canonically in app storage instead.
 - PWA/API does not exist yet.
 - No database migration framework beyond the simple in-project migrations module.
 
@@ -243,6 +266,8 @@ Current tests cover:
 - Markdown rendering;
 - deletion path safety;
 - SQLite-backed processing sessions and temp cleanup;
+- DB-first document/item/file creation and Obsidian export without new
+  manifests;
 - correction rules;
 - order document parsing/review behavior;
 - user-scoped receipt listing.

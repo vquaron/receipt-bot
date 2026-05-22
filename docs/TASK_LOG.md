@@ -2,6 +2,52 @@
 
 ## 2026-05-22
 
+### Make documents, items, and files DB-first
+
+**Summary:** Moved confirmed receipt/order persistence to SQLite documents,
+items, and file records, with canonical files stored under app storage and
+Obsidian generated as an export.
+**Files changed:**
+
+- `app/repositories/documents.py`
+- `app/receipts/models.py`
+- `app/receipts/repository.py`
+- `app/obsidian/writer.py`
+- `app/telegram/handlers/receipt.py`
+- `app/telegram/handlers/receipts.py`
+- `tests/test_documents_repository.py`
+- `README.md`
+- `docs/PROJECT_STATE.md`
+- `docs/DECISIONS.md`
+- `docs/TASK_LOG.md`
+- `docs/NEXT_STEPS.md`
+
+**Details:**
+
+- Confirmed review now creates `documents`, `document_items`, and
+  `document_files` rows with parsed JSON, review payload JSON, possible errors,
+  parser/schema/prompt versions, and file metadata.
+- Temp image/OCR files move into
+  `data/storage/documents/<document_id>/original.jpg`,
+  `clean.hy.txt`, and `source.hy.txt`.
+- Obsidian Markdown and exported image are generated from DB/parsed JSON and
+  recorded as export file rows.
+- New manifest JSON files are not created by the confirm flow.
+- `/my_receipts` and `/receipt` read DB-first documents before falling back to
+  legacy manifests.
+
+**Reason:** Documents, items, and files are structured application data and need
+SQLite as their source of truth before PWA/API, DB-first delete, and reliable
+file retention work.
+**Validation:** `./.venv/bin/python -m pytest -q` passed.
+**Follow-ups:** Make `/delete_receipt`, `/grant_receipt`, and
+`/export_receipts` DB-first with manifest fallback for old receipts; implement
+file retention/image policy.
+**Related decisions:** `2026-05-21 - SQLite as source of truth`;
+`2026-05-21 - Obsidian as export / representation`;
+`2026-05-21 - Store processing stages`;
+`2026-05-22 - Canonical document files in app storage`.
+
 ### Move processing sessions to SQLite
 
 **Summary:** Moved active Telegram review sessions from file JSON storage to

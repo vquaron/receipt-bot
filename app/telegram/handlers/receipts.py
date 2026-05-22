@@ -6,6 +6,11 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from app.repositories.documents import (
+    FILE_KIND_OBSIDIAN_NOTE,
+    FILE_KIND_ORIGINAL_IMAGE,
+    FILE_KIND_OBSIDIAN_ATTACHMENT,
+)
 from app.receipts.document_types import document_type_label
 from app.receipts.repository import ReceiptCopyError, ReceiptNotFoundError
 from app.storage.paths import safe_vault_path
@@ -50,30 +55,11 @@ async def receipt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if record is None:
         await update.message.reply_text("Чек не найден среди ваших чеков.")
         return
-    vault = settings(context).obsidian_vault
     try:
-        user_prefix = f"{user_root_rel(settings(context), update.effective_user.id).as_posix()}/"
-    except ValueError:
-        LOGGER.error(
-            "Invalid USER_VAULT_ROOT configuration while opening receipt for user_id=%s receipt_id=%s query=%r",
-            update.effective_user.id,
-            record.receipt_id,
-            query,
-            exc_info=True,
-        )
-        await update.message.reply_text("Неверная конфигурация хранилища чеков.")
-        return
-    try:
-        note_path = safe_vault_path(vault, record.note_rel)
-        image_path = _first_existing_file(
-            vault,
-            record.files,
-            prefixes=(user_prefix,),
-            suffixes=(".jpg", ".jpeg", ".png"),
-        )
+        note_path, image_path = _record_paths(record, context, update.effective_user.id)
     except ValueError:
         LOGGER.warning(
-            "Invalid receipt manifest paths for user_id=%s receipt_id=%s query=%r",
+            "Invalid receipt paths for user_id=%s receipt_id=%s query=%r",
             update.effective_user.id,
             record.receipt_id,
             query,
@@ -95,7 +81,7 @@ async def receipt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.reply_text(summary)
     if image_path:
         await update.message.reply_photo(photo=image_path)
-    if note_path.exists():
+    if note_path and note_path.exists():
         await update.message.reply_document(document=note_path)
 
 
@@ -166,3 +152,36 @@ def _first_existing_file(vault, rel_paths, *, prefixes: tuple[str, ...], suffixe
         if path.exists() and path.is_file():
             return path
     return None
+
+
+def _record_paths(record, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    if record.source == "db":
+        image_file = _first_record_file(record, FILE_KIND_ORIGINAL_IMAGE) or _first_record_file(record, FILE_KIND_OBSIDIAN_ATTACHMENT)
+        note_file = _first_record_file(record, FILE_KIND_OBSIDIAN_NOTE)
+        image_path = receipts(context).file_path(image_file) if image_file is not None else None
+        note_path = receipts(context).file_path(note_file) if note_file is not None else None
+        return note_path, image_path
+
+    vault = settings(context).obsidian_vault
+    try:
+        user_prefix = f"{user_root_rel(settings(context), user_id).as_posix()}/"
+    except ValueError:
+        LOGGER.error(
+            "Invalid USER_VAULT_ROOT configuration while opening receipt for user_id=%s receipt_id=%s",
+            user_id,
+            record.receipt_id,
+            exc_info=True,
+        )
+        raise
+    note_path = safe_vault_path(vault, record.note_rel)
+    image_path = _first_existing_file(
+        vault,
+        record.files,
+        prefixes=(user_prefix,),
+        suffixes=(".jpg", ".jpeg", ".png"),
+    )
+    return note_path, image_path
+
+
+def _first_record_file(record, kind: str):
+    return next((file for file in record.file_records if file.kind == kind), None)

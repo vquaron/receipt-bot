@@ -119,7 +119,9 @@ WEBHOOK_SECRET_TOKEN=
 
 `OPENAI_MODEL` можно поменять без изменения кода. По умолчанию используется недорогая современная модель `gpt-5.4-mini`.
 
-SQLite-хранилище создаётся при старте бота. На текущем этапе оно подготавливает DB-first фундамент для следующих PR; существующий пользовательский flow пока остаётся совместимым с файловым MVP.
+SQLite-хранилище создаётся при старте бота. Оно хранит пользователей, заявки,
+квоты, активные review-сессии и новые подтверждённые документы/items/files.
+Obsidian остаётся человекочитаемым экспортом, а не primary storage.
 
 Секреты можно читать напрямую из env или через `*_FILE`:
 
@@ -164,15 +166,16 @@ ALLOWED_TELEGRAM_USER_IDS=123456789,987654321
 PRIVILEGED_TELEGRAM_USER_IDS=
 ```
 
-Админы всегда считаются разрешёнными пользователями. Пользователи, роли, заявки на доступ, события квот и активные review-сессии хранятся в SQLite:
+Админы всегда считаются разрешёнными пользователями. Пользователи, роли, заявки на доступ, события квот, активные review-сессии и новые документы хранятся в SQLite:
 
 ```text
 data/app.db
+data/storage/documents/
 data/tmp/processing/
 data/corrections.json
 ```
 
-`data/access.json`, `data/users/users.json`, `data/users/access_requests.json` и `data/sessions/*.json` больше не являются runtime-хранилищем и не импортируются автоматически. Доступ задаётся через `.env` bootstrap и меняется через SQLite-backed Telegram approval flow. Незавершённые проверки восстанавливаются из SQLite `processing_sessions`; временные изображения и OCR-файлы лежат в `data/tmp/processing/<session_id>/` и очищаются после confirm/cancel/failure.
+`data/access.json`, `data/users/users.json`, `data/users/access_requests.json` и `data/sessions/*.json` больше не являются runtime-хранилищем и не импортируются автоматически. Доступ задаётся через `.env` bootstrap и меняется через SQLite-backed Telegram approval flow. Незавершённые проверки восстанавливаются из SQLite `processing_sessions`; временные изображения и OCR-файлы лежат в `data/tmp/processing/<session_id>/`, после confirm переносятся в `data/storage/documents/<document_id>/`, а после cancel/failure очищаются.
 
 Если пользователь не в allowlist, бот не скачивает фото, не вызывает Google Vision, не вызывает OpenAI и не создаёт файлы. Вместо этого создаётся pending-заявка, а всем администраторам приходит сообщение с кнопками `Approve` / `Reject`.
 
@@ -202,20 +205,23 @@ PRIVILEGED_MONTHLY_RECEIPT_LIMIT=0
 
 ## 8. Структура Obsidian vault
 
-После успешной обработки бот создаёт:
+После успешной обработки нового чека бот создаёт DB-записи в `documents`,
+`document_items` и `document_files`, переносит canonical image/OCR в app storage
+и экспортирует Markdown с изображением в Obsidian:
 
 ```text
+data/storage/documents/<document_id>/original.jpg
+data/storage/documents/<document_id>/clean.hy.txt
+data/storage/documents/<document_id>/source.hy.txt
 Users/<telegram_user_id>/Receipts/YYYY/MM/<file_name>.md
 Users/<telegram_user_id>/Attachments/receipts/YYYY/MM/<file_name>.jpg
-Users/<telegram_user_id>/OCR/YYYY/MM/<file_name>.clean.hy.txt
-Users/<telegram_user_id>/OCR_VERIFIED/YYYY/MM/<file_name>.verified.hy.txt
 Users/<telegram_user_id>/DEBUG/openai/YYYY/MM/<temporary_name>.openai.raw.txt
-Users/<telegram_user_id>/MANIFEST/receipts/YYYY/MM/<file_name>.manifest.json
 ```
 
 `DEBUG/openai/...` появляется только если OpenAI вернул невалидный JSON.
 
-`MANIFEST/...` создаётся для безопасного удаления всех файлов конкретного чека.
+Новые `MANIFEST/...` файлы не создаются. Старые manifest-файлы остаются
+поддержанным fallback для legacy-чеков.
 
 Каждый пользователь пишет в отдельное пространство внутри vault:
 
@@ -279,7 +285,7 @@ category: "Grocery"
 - цену за единицу;
 - сумму строки.
 
-Текст вроде ингредиентов, состава, описаний, рекламных блоков, кнопок приложения, адресов доставки и прочего UI-шума должен пропускаться. Итоговая заметка сохраняется в той же структуре `Receipts`, но в manifest добавляется `document_type: "order"`, а заголовок заметки становится `Заказ`.
+Текст вроде ингредиентов, состава, описаний, рекламных блоков, кнопок приложения, адресов доставки и прочего UI-шума должен пропускаться. Итоговый документ сохраняется в SQLite с `document_type: "order"`, а экспортная заметка в Obsidian получает заголовок `Заказ`.
 
 ## 11. Формат результата OpenAI
 
@@ -312,7 +318,7 @@ OpenAI должен вернуть строгий JSON:
 }
 ```
 
-В Markdown-заметке сначала выводится чек на русском, затем таблица товаров, затем английская версия и таблица товаров на английском. Исходный OCR не выводится в теле заметки, но сохраняется отдельными файлами и доступен через служебные OCR-ссылки.
+В Markdown-заметке сначала выводится чек на русском, затем таблица товаров, затем английская версия и таблица товаров на английском. Исходный OCR не выводится в теле заметки; canonical OCR сохраняется в `data/storage/documents/<document_id>/` и записывается в SQLite `document_files`.
 
 Если JSON невалиден, заметка не создаётся, а сырой ответ сохраняется в `DEBUG/openai/...`.
 
@@ -330,7 +336,7 @@ OpenAI должен вернуть строгий JSON:
 /delete_receipt 2025-11-24_at_torg_1318AMD.md
 ```
 
-Удаление связанных файлов сначала использует manifest JSON. Если manifest отсутствует, бот использует fallback по wikilinks из разделов `Оригинал` и `Контроль OCR`. В обоих случаях бот удаляет только файлы внутри `OBSIDIAN_VAULT`.
+Удаление связанных файлов пока остаётся legacy-командой: оно использует manifest JSON или fallback по wikilinks из разделов `Оригинал` и `Контроль OCR`. DB-first удаление новых чеков запланировано отдельным PR. В legacy-режиме бот удаляет только файлы внутри `OBSIDIAN_VAULT`.
 
 Для пользователя дополнительно проверяется scope: manifest не может удалить файлы за пределами `Users/<telegram_user_id>/...`.
 
@@ -380,14 +386,14 @@ WEBHOOK_PORT=8080
 python -m pytest -q
 ```
 
-Тесты покрывают path safety, JSON parsing, Markdown rendering, access control, SQLite migrations, scoped correction rules, manifest deletion, user isolation, per-user receipt index/export, processing sessions и user quotas.
+Тесты покрывают path safety, JSON parsing, Markdown rendering, access control, SQLite migrations, scoped correction rules, manifest deletion, user isolation, DB-first documents/items/files, per-user receipt index/export, processing sessions и user quotas.
 
 ## 15. Ограничения MVP
 
-- без внешней базы данных; локальное SQLite-хранилище используется для DB-first foundation, доступа пользователей, квот и review-сессий;
+- без внешней базы данных; локальное SQLite-хранилище используется для доступа пользователей, квот, review-сессий и новых документов/items/files;
 - без веб-интерфейса;
 - без очереди задач и фоновых воркеров;
 - незавершённые review-сессии хранятся в SQLite `processing_sessions`;
-- часть runtime-состояния пока ещё хранится в JSON-файлах в `data`;
+- правила исправлений пока ещё хранятся в JSON-файле в `data`;
 - используется один прямой поток обработки на пользователя;
 - правила исправлений простые и основаны на точных заменах значений.

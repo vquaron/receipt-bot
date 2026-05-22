@@ -2,17 +2,18 @@
 
 ## Immediate next steps
 
-- [ ] PR5: make documents, items, and files DB-first.
-  - Context: The schema includes `documents`, `document_items`, and
-    `document_files`, but confirmed review still writes directly to Obsidian.
-  - Expected outcome: confirmed reviews create DB rows with `parsed_json`,
-    `review_payload_json`, `possible_errors_json`, version fields, items, and
-    file records; Obsidian note generation becomes export from DB/parsed JSON.
-  - Depends on: SQLite processing sessions and temp storage cleanup.
+- [ ] PR5 follow-up: make delete/copy/export fully DB-first.
+  - Context: Confirmed reviews now create `documents`, `document_items`, and
+    `document_files`, and `/my_receipts` + `/receipt` read new DB documents.
+    `/delete_receipt`, `/grant_receipt`, and `/export_receipts` still use
+    legacy manifest/file behavior.
+  - Expected outcome: new receipts delete/copy/export from DB `document_files`;
+    manifest fallback remains only for old receipts.
+  - Depends on: DB-first document/file creation.
 
 - [ ] PR6: implement file retention and image policy.
   - Context: Storage cost matters. Current files preserve original image, clean
-    OCR, verified OCR, manifest, and Markdown.
+    OCR, source OCR, and Obsidian export artifacts for new receipts.
   - Expected outcome: define `stored_image` vs `original_image`; strip EXIF from
     optimized stored images if enabled; record sha256/size/mime; keep originals
     according to explicit settings; stop keeping no-value temp files.
@@ -65,6 +66,11 @@
 - [ ] Implement DB-first `/delete_receipt` with manifest fallback.
   - Why it matters: New receipts should delete only files recorded in
     `document_files`; old receipts can still use manifest fallback.
+  - Priority: high
+
+- [ ] Implement DB-first `/grant_receipt` and `/export_receipts`.
+  - Why it matters: New DB-first receipts no longer create manifests, so sharing
+    and export need to read `documents` and `document_files`.
   - Priority: high
 
 - [ ] Add cleanup for `data/exports` and debug retention.

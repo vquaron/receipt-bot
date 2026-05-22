@@ -9,7 +9,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from app.llm.openai_parser import OpenAIInvalidJSONError, OpenAIQuotaError
-from app.obsidian.writer import write_openai_debug_file, write_receipt_note
+from app.obsidian.writer import write_openai_debug_file
 from app.ocr.google_vision import (
     GoogleVisionCredentialsError,
     GoogleVisionError,
@@ -39,6 +39,7 @@ from app.telegram.handlers.common import (
     corrections,
     delete_session,
     quotas,
+    receipts,
     save_session,
     send_text_chunks,
     sessions,
@@ -343,22 +344,23 @@ async def create_note_from_review(session: ReceiptSession, reply_target, context
         await reply_target.reply_text("Нет проверенных полей заметки.")
         return
     try:
-        artifact = await asyncio.to_thread(write_receipt_note, settings(context), session, session.parsed_receipt)
+        result = await asyncio.to_thread(receipts(context).documents.create_confirmed_from_session, session, session.parsed_receipt)
     except Exception:
-        LOGGER.exception("Unexpected note generation failure.")
+        LOGGER.exception("Unexpected DB-first document finalization failure.")
         delete_session(session.user_id, context, final_state=SessionState.FAILED)
-        await reply_target.reply_text("Не удалось создать Markdown-заметку.")
+        await reply_target.reply_text("Не удалось сохранить документ.")
         return
     delete_session(session.user_id, context, final_state=SessionState.DONE)
+    record = result.record
     await reply_target.reply_text(
         "\n".join(
             [
-                f"Готово: создана заметка {artifact.file_name}",
-                f"receipt_id: {artifact.receipt_id}",
-                f"merchant: {artifact.merchant}",
-                f"date: {artifact.date}",
-                f"amount: {artifact.amount}",
-                f"currency: {artifact.currency}",
+                f"Готово: создана заметка {record.receipt_id}.md",
+                f"receipt_id: {record.receipt_id}",
+                f"merchant: {record.merchant}",
+                f"date: {record.date}",
+                f"amount: {record.amount or 'unknown_amount'}",
+                f"currency: {record.currency}",
             ]
         )
     )
