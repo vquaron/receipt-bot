@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0f172a">
+    <link rel="manifest" href="/app.webmanifest">
+    <link rel="stylesheet" href="/static/styles.css">
+    <title>Receipt Bot</title>
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Receipts</h1>
+        <p id="profile">Loading...</p>
+      </div>
+      <button id="logout" type="button">Logout</button>
+    </header>
+    <main class="layout">
+      <section class="list" aria-label="Receipts">
+        <div id="receipt-list" class="receipt-list"></div>
+      </section>
+      <section class="detail" aria-label="Receipt detail">
+        <div id="receipt-detail" class="empty">Select a receipt</div>
+      </section>
+    </main>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

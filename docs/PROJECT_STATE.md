@@ -14,6 +14,7 @@ structured SQLite data rather than parse Markdown.
 
 - Runtime: Python 3.11+.
 - Telegram framework: `python-telegram-bot`.
+- Web MVP: separate FastAPI service with lightweight PWA assets.
 - OCR: Google Cloud Vision `DOCUMENT_TEXT_DETECTION`.
 - LLM parsing: OpenAI Responses API.
 - Config: `.env` plus `*_FILE` secret support.
@@ -22,7 +23,7 @@ structured SQLite data rather than parse Markdown.
 - Current human-readable export: Obsidian Markdown in `OBSIDIAN_VAULT`.
 - Current processing state: users, access requests, quota events, review
   processing sessions, newly confirmed receipt/order documents, and correction
-  rules are in SQLite.
+  rules, magic links, and web sessions are in SQLite.
 
 ## Source of truth
 
@@ -38,7 +39,8 @@ Current implementation status:
 
 - SQLite is already the source of truth for users, access requests, quota usage
   events, active review processing sessions, newly confirmed documents,
-  document items, document files, and correction rules.
+  document items, document files, correction rules, magic links, and web
+  sessions.
 - SQLite schema already includes planned tables for documents, items, files,
   processing sessions, usage events, correction rules, magic links, and web
   sessions.
@@ -134,7 +136,8 @@ Current persistent files:
 - `data/exports/<telegram_user_id>/receipts_YYYYMMDD_HHMMSS.zip` for user ZIP
   exports
 - `data/app.db` for users, access requests, `usage_events`,
-  `processing_sessions`, `documents`, `document_items`, and `document_files`
+  `processing_sessions`, `documents`, `document_items`, `document_files`,
+  `correction_rules`, `magic_links`, and `web_sessions`
 - `data/storage/documents/<document_id>/original.jpg` when the image backend is
   local
 - `data/storage/documents/<document_id>/stored.jpg` when the image backend is
@@ -245,12 +248,16 @@ Current correction rules:
 - `data/corrections.json` is imported only once when `correction_rules` is
   empty, then ignored as runtime storage.
 
-Future web authorization:
+Current web authorization and PWA:
 
-- `magic_links` and `web_sessions` tables exist in the schema for PWA login.
-- No PWA/API is implemented yet.
-- Future magic-link flow should store only token hashes, use short TTLs, and
-  issue secure web sessions.
+- `/web` in Telegram creates a short-lived one-time magic link for allowed
+  users.
+- Magic links and web sessions are stored in SQLite using SHA-256 token/session
+  hashes; raw tokens are only shown to the user in the Telegram link/cookie.
+- Web MVP is a separate FastAPI service with a lightweight read-only PWA.
+- Web API shows only DB-first documents for the current user: receipt list,
+  detail, items, and `stored_image`/`original_image` image endpoint.
+- Legacy manifest receipts are not shown in Web MVP.
 
 ## External integrations
 
@@ -285,12 +292,11 @@ Future web authorization:
 
 ## Current limitations
 
-- `magic_links` and `web_sessions` are schema-level foundations, not fully wired
-  into runtime logic yet.
+- Web MVP is read-only and does not support delete/export/grant/correction-rule
+  management yet.
 - Legacy Obsidian exports can include `OCR_VERIFIED`; new DB-first exports do
   not create permanent `OCR_VERIFIED` files and store OCR canonically in app
   storage instead.
-- PWA/API does not exist yet.
 - No database migration framework beyond the simple in-project migrations module.
 
 ## Testing and validation
@@ -320,6 +326,7 @@ Current tests cover:
 - storage health checks for path safety, missing files, checksum drift,
   storage status, S3 metadata, and app-storage orphans;
 - correction rules;
+- magic-link auth, web sessions, and read-only Web MVP API;
 - order document parsing/review behavior;
 - user-scoped receipt listing.
 
@@ -347,4 +354,4 @@ gcloud auth application-default set-quota-project PROJECT_ID
 
 ## Last updated
 
-2026-05-22
+2026-05-23

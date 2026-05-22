@@ -1,5 +1,49 @@
 # Task Log
 
+## 2026-05-23
+
+### Add Web MVP with magic-link auth
+
+**Summary:** Added a separate FastAPI read-only Web MVP with Telegram magic-link
+login.
+**Files changed:**
+
+- `app/web/`
+- `web.py`
+- `app/config.py`
+- `app/repositories/documents.py`
+- `app/telegram/bot.py`
+- `app/telegram/handlers/web.py`
+- `tests/test_web_auth.py`
+- `tests/test_web_app.py`
+- `tests/test_web_telegram.py`
+- `requirements.txt`
+- `.env.example`
+- `deploy/docker/`
+- `README.md`
+- `docs/PROJECT_STATE.md`
+- `docs/DECISIONS.md`
+- `docs/NEXT_STEPS.md`
+- `docs/TASK_LOG.md`
+
+**Details:**
+
+- `/web` creates a short-lived one-time magic link for allowed Telegram users.
+- Magic links and web sessions store only SHA-256 hashes in SQLite.
+- Telegram disables link previews for one-time login URLs, and revoked users
+  are rejected from both magic-login and PWA shell access.
+- Web API/PWA supports current-user DB document list, detail, items, and receipt
+  image through `stored_image` with `original_image` fallback.
+- Legacy manifest receipts are intentionally excluded from Web MVP.
+
+**Reason:** Users need a mobile-friendly read surface over SQLite-backed
+documents without reintroducing Markdown/manifest as application state.
+**Validation:** `./.venv/bin/python -m pytest -q` passed with 126 tests.
+**Follow-ups:** PR11: SQLite FTS/search for merchants, summaries, and item
+names; later web write actions need audit/security work.
+**Related decisions:** `2026-05-23 - First Web MVP is read-only and DB-only`;
+`2026-05-21 - SQLite as source of truth`.
+
 ## 2026-05-22
 
 ### Move correction rules to SQLite

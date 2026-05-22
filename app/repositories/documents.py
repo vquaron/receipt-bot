@@ -70,6 +70,26 @@ class DocumentArchiveFile:
     archive_name: str
 
 
+@dataclass(frozen=True, slots=True)
+class DocumentItemRecord:
+    position: int
+    name_original: str
+    name_ru: str
+    name_en: str
+    unit_price: str
+    quantity: str
+    unit: str
+    line_total: str
+    possible_error: str
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentDetail:
+    record: ReceiptRecord
+    parsed: dict[str, object]
+    items: tuple[DocumentItemRecord, ...]
+
+
 class DocumentRepository:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -297,6 +317,44 @@ class DocumentRepository:
                 return None
             files = _files_by_document(connection, [str(row["id"])]).get(str(row["id"]), ())
         return _record_from_document_row(row, files)
+
+    def get_user_document_detail(self, user_id: int, query: str) -> DocumentDetail | None:
+        cleaned = query.strip().strip('"').strip("'")
+        if not cleaned:
+            return None
+        cleaned_stem = Path(cleaned).stem
+        with connect_database(self.settings) as connection:
+            row = connection.execute(
+                """
+                select *
+                from documents
+                where owner_telegram_user_id = ?
+                  and deleted_at is null
+                  and status in (?, ?)
+                  and (id = ? or file_stem = ? or file_stem = ?)
+                order by created_at desc
+                limit 1
+                """,
+                (user_id, DOCUMENT_STATUS_CONFIRMED, DOCUMENT_STATUS_EXPORT_FAILED, cleaned, cleaned, cleaned_stem),
+            ).fetchone()
+            if row is None:
+                return None
+            document_id = str(row["id"])
+            files = _files_by_document(connection, [document_id]).get(document_id, ())
+            item_rows = connection.execute(
+                """
+                select *
+                from document_items
+                where document_id = ?
+                order by position
+                """,
+                (document_id,),
+            ).fetchall()
+        return DocumentDetail(
+            record=_record_from_document_row(row, files),
+            parsed=_json_object(row["parsed_json"]),
+            items=tuple(_item_from_row(item) for item in item_rows),
+        )
 
     def get_any_document(self, query: str) -> ReceiptRecord | None:
         cleaned = query.strip().strip('"').strip("'")
@@ -956,6 +1014,20 @@ def _record_from_document_row(row: sqlite3.Row, files: tuple[ReceiptFileRecord, 
 
 def _first_file(files: tuple[ReceiptFileRecord, ...], kind: str) -> ReceiptFileRecord | None:
     return next((file for file in files if file.kind == kind), None)
+
+
+def _item_from_row(row: sqlite3.Row) -> DocumentItemRecord:
+    return DocumentItemRecord(
+        position=int(row["position"]),
+        name_original=str(row["name_original"] or ""),
+        name_ru=str(row["name_ru"] or ""),
+        name_en=str(row["name_en"] or ""),
+        unit_price=str(row["unit_price"] or ""),
+        quantity=str(row["quantity"] or ""),
+        unit=str(row["unit"] or ""),
+        line_total=str(row["line_total"] or ""),
+        possible_error=str(row["possible_error"] or ""),
+    )
 
 
 def _final_parsed(parsed: dict[str, object]) -> tuple[dict[str, object], date]:

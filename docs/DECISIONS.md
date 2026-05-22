@@ -249,6 +249,27 @@ reuse.
 **Review trigger:** Revisit after DB-backed documents and magic-link web auth are
 implemented.
 
+### 2026-05-23 - First Web MVP is read-only and DB-only
+
+**Status:** active
+**Decision:** The first Web MVP uses magic-link auth and a read-only FastAPI/PWA
+surface over DB-first documents only. Legacy manifest receipts stay available
+through Telegram/Obsidian fallback, not through the first web API.
+**Context:** SQLite now owns users, quotas, processing sessions, documents,
+files, and correction rules. Users need a mobile-friendly read surface, but
+write actions and legacy migration would make the first web PR too broad.
+**Reason:** A DB-only read surface preserves the SQLite source-of-truth
+direction and keeps auth/session/storage paths small enough to review.
+**Alternatives considered:** API-only without PWA; include legacy manifests;
+include delete/export/correction management. API-only is less useful to users;
+legacy manifests would pull Markdown parsing back into the web API; write
+actions need more audit/security work.
+**Impact:** `/web` creates one-time magic links; web sessions use HttpOnly
+cookies; the PWA supports list/detail/items/images for current-user DB
+documents only.
+**Review trigger:** Revisit when adding search, legacy migration, or web write
+actions.
+
 ### 2026-05-21 - Correction rules as durable scoped data
 
 **Status:** active  
@@ -413,20 +434,18 @@ constraints, future web auth, and multi-user growth.
 **Reason for change:** Quota usage needs durable event history, auditing, and a
 path toward future analytics.
 
-## Uncertain / pending decisions
+## Resolved questions
 
 ### 2026-05-22 - Scope of first PWA API
 
-**Status:** uncertain  
+**Status:** resolved by `2026-05-23 - First Web MVP is read-only and DB-only`
 **Question:** What is the smallest useful read-only API/PWA surface after
 SQLite-backed documents exist?  
 **Context:** PWA should not be built on Markdown, but the exact MVP can vary.  
 **Options:** List/detail/image only; include filters/search; include export and
 delete; include correction rule management.  
-**Current leaning:** Start with magic-link login plus read-only document list,
-detail, items, and image endpoints.  
-**Needed to decide:** Complete document/file repositories and clarify first
-mobile use case.
+**Answer:** Magic-link login plus read-only document list, detail, items, and
+image endpoints. Legacy manifest receipts are excluded from the first Web MVP.
 
 <!--
 ### YYYY-MM-DD - Short decision title

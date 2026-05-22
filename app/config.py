@@ -30,6 +30,12 @@ class Settings:
     webhook_listen: str = "0.0.0.0"
     webhook_port: int = 8080
     webhook_secret_token: str = ""
+    web_base_url: str = ""
+    web_listen: str = "0.0.0.0"
+    web_port: int = 8081
+    web_magic_link_ttl_minutes: int = 10
+    web_session_ttl_days: int = 30
+    web_session_cookie_name: str = "receipt_bot_session"
     database_url: str = "sqlite:///data/app.db"
     db_busy_timeout_ms: int = 5000
     app_storage_dir: Path = Path("data/storage")
@@ -113,6 +119,12 @@ def load_settings() -> Settings:
         webhook_listen=_get("WEBHOOK_LISTEN", env_file_values) or "0.0.0.0",
         webhook_port=_int("WEBHOOK_PORT", env_file_values, 8080),
         webhook_secret_token=_get("WEBHOOK_SECRET_TOKEN", env_file_values) or "",
+        web_base_url=(_get("WEB_BASE_URL", env_file_values) or "").rstrip("/"),
+        web_listen=_get("WEB_LISTEN", env_file_values) or "0.0.0.0",
+        web_port=_int("WEB_PORT", env_file_values, 8081),
+        web_magic_link_ttl_minutes=_int("WEB_MAGIC_LINK_TTL_MINUTES", env_file_values, 10),
+        web_session_ttl_days=_int("WEB_SESSION_TTL_DAYS", env_file_values, 30),
+        web_session_cookie_name=_get("WEB_SESSION_COOKIE_NAME", env_file_values) or "receipt_bot_session",
         database_url=database_url,
         db_busy_timeout_ms=_int("DB_BUSY_TIMEOUT_MS", env_file_values, 5000),
         app_storage_dir=_path("APP_STORAGE_DIR", env_file_values, data_dir / "storage"),

@@ -1,7 +1,12 @@
-# Optional webhook mode only.
+# Optional webhook + web MVP proxy.
 # Set BOT_MODE=webhook, WEBHOOK_URL=https://your-domain.example/telegram-webhook,
-# WEBHOOK_SECRET_TOKEN=<random secret>.
+# WEBHOOK_SECRET_TOKEN=<random secret>, WEB_BASE_URL=https://your-domain.example.
 
 your-domain.example {
-	reverse_proxy receipt-bot:8080
+	handle /telegram-webhook {
+		reverse_proxy receipt-bot:{$WEBHOOK_PORT:8080}
+	}
+	handle {
+		reverse_proxy receipt-web:{$WEB_PORT:8081}
+	}
 }

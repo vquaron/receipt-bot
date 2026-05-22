@@ -6,7 +6,7 @@ Telegram-бот для обработки армянских чеков:
 
 Ручная проверка выполняется не по армянскому OCR, а по русским полям, которые попадут в заметку.
 
-Стек MVP: Python 3.11+, `python-telegram-bot`, `google-cloud-vision`, `openai`, `python-dotenv`.
+Стек MVP: Python 3.11+, `python-telegram-bot`, `FastAPI`, `google-cloud-vision`, `openai`, `python-dotenv`.
 
 ## Project context persistence
 
@@ -125,6 +125,12 @@ PRIVILEGED_MONTHLY_RECEIPT_LIMIT=0
 BOT_MODE=polling
 WEBHOOK_URL=
 WEBHOOK_SECRET_TOKEN=
+WEB_BASE_URL=
+WEB_LISTEN=0.0.0.0
+WEB_PORT=8081
+WEB_MAGIC_LINK_TTL_MINUTES=10
+WEB_SESSION_TTL_DAYS=30
+WEB_SESSION_COOKIE_NAME=receipt_bot_session
 ```
 
 `OPENAI_MODEL` можно поменять без изменения кода. По умолчанию используется недорогая современная модель `gpt-5.4-mini`.
@@ -202,6 +208,7 @@ data/debug/
 - `/access` — создать заявку на доступ;
 - `/users` — список allowed users, только для админа;
 - `/revoke <user_id>` — отозвать доступ, только для админа.
+- `/web` — получить одноразовую magic-link ссылку для входа в read-only Web MVP.
 
 Роли:
 
@@ -391,6 +398,18 @@ OpenAI должен вернуть строгий JSON:
   `document_files`, missing files, checksum drift, unsafe refs и orphan app
   files.
 
+Web MVP запускается отдельным процессом:
+
+```bash
+python web.py
+```
+
+Telegram `/web` создаёт одноразовую ссылку с TTL
+`WEB_MAGIC_LINK_TTL_MINUTES`. После входа web-сессия хранится в HttpOnly cookie
+`WEB_SESSION_COOKIE_NAME` до `WEB_SESSION_TTL_DAYS`. Web MVP read-only и
+показывает только DB-first документы текущего пользователя; legacy manifest
+чеки остаются доступны через Telegram/Obsidian fallback.
+
 ## 13. Production и Docker
 
 Локальный MVP и production polling запускаются одинаково:
@@ -411,6 +430,9 @@ Docker-файлы находятся в `deploy/docker`:
 docker compose -f deploy/docker/docker-compose.yml up -d --build
 ```
 
+Compose поднимает два процесса из одного образа: `receipt-bot` для Telegram и
+`receipt-web` для FastAPI Web MVP.
+
 Webhook mode опционален:
 
 ```env
@@ -419,9 +441,11 @@ WEBHOOK_URL=https://your-domain.example/telegram-webhook
 WEBHOOK_SECRET_TOKEN=<random-secret>
 WEBHOOK_LISTEN=0.0.0.0
 WEBHOOK_PORT=8080
+WEB_BASE_URL=https://your-domain.example
+WEB_PORT=8081
 ```
 
-В webhook mode используется проверка Telegram secret token через заголовок `X-Telegram-Bot-Api-Secret-Token`. Caddyfile в `deploy/docker/Caddyfile` нужен только для webhook-сценария.
+В webhook mode используется проверка Telegram secret token через заголовок `X-Telegram-Bot-Api-Secret-Token`. Caddyfile в `deploy/docker/Caddyfile` проксирует `/telegram-webhook` в Telegram bot и остальные запросы в Web MVP.
 
 ## 14. Тесты
 
@@ -429,14 +453,13 @@ WEBHOOK_PORT=8080
 python -m pytest -q
 ```
 
-Тесты покрывают path safety, JSON parsing, Markdown rendering, access control, SQLite migrations, scoped correction rules, manifest deletion, user isolation, DB-first documents/items/files/delete/copy/export, per-user receipt index/export, processing sessions и user quotas.
+Тесты покрывают path safety, JSON parsing, Markdown rendering, access control, SQLite migrations, scoped correction rules, manifest deletion, user isolation, DB-first documents/items/files/delete/copy/export, per-user receipt index/export, processing sessions, user quotas, magic-link auth и read-only Web MVP API.
 
 ## 15. Ограничения MVP
 
 - без внешней базы данных; локальное SQLite-хранилище используется для доступа пользователей, квот, review-сессий и новых документов/items/files;
-- без веб-интерфейса;
+- Web MVP пока read-only: без web delete/export/grant/correction-rule management;
 - без очереди задач и фоновых воркеров;
 - незавершённые review-сессии хранятся в SQLite `processing_sessions`;
-- правила исправлений пока ещё хранятся в JSON-файле в `data`;
 - используется один прямой поток обработки на пользователя;
-- правила исправлений простые и основаны на точных заменах значений.
+- правила исправлений хранятся в SQLite и пока остаются простыми scoped exact replacements.

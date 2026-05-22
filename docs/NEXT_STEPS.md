@@ -2,13 +2,12 @@
 
 ## Immediate next steps
 
-- [ ] PR10: add magic-link `/web` flow and read-only API/PWA MVP.
-  - Context: SQLite now owns access, quotas, sessions, documents, files, and
-    correction rules. The next product step is a minimal web read surface.
-  - Expected outcome: Telegram `/web` creates a short-lived magic link;
-    `magic_links` and `web_sessions` become runtime-backed; API/PWA supports
-    receipt list, detail, items, and image access through DB/document files.
-  - Depends on: DB-backed documents/files and current storage backend.
+- [ ] PR11: add FTS/search for merchants, summaries, and item names.
+  - Context: Web MVP provides read-only list/detail/image views, but search is
+    still not DB-backed.
+  - Expected outcome: SQLite FTS5 indexes merchant, summary, and item names;
+    API/PWA exposes search/filtering without parsing Markdown.
+  - Depends on: DB-backed documents/items and Web MVP.
 
 - [ ] Keep docs context updated after every substantial PR.
   - Context: `docs/` now acts as persistent project memory.
@@ -32,14 +31,12 @@
     DB-first documents do not create permanent `OCR_VERIFIED`; canonical OCR
     lives in app storage and SQLite `document_files`.
 
-- [ ] What should the first PWA/API include?
+- [x] What should the first PWA/API include?
   - Context: PWA/API should consume SQLite, not Markdown.
   - Options: Read-only list/detail/image; filters/search; export/delete;
     correction rule management.
-  - Current leaning: Magic-link login plus read-only document list, detail,
-    items, and image endpoint.
-  - Needed to decide: Finish DB-backed documents/files and choose the first
-    mobile workflow.
+  - Decision: Magic-link login plus read-only DB document list, detail, items,
+    and image endpoint. Legacy manifest receipts are excluded from Web MVP.
 
 ## Backlog
 
@@ -47,11 +44,6 @@
   - Why it matters: Health checks now report drift, but repair should remain a
     separate dry-run-first operation.
   - Priority: medium
-
-- [ ] PR11: add FTS/search for merchants, summaries, and item names.
-  - Why it matters: Search and analytics become valuable once many receipts are
-    stored.
-  - Priority: low
 
 ## Risks to watch
 

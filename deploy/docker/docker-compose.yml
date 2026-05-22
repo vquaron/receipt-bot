@@ -9,3 +9,17 @@ services:
       - ../../data:/app/data
       - ${OBSIDIAN_VAULT}:${OBSIDIAN_VAULT}
     restart: unless-stopped
+
+  receipt-web:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    command: ["python", "web.py"]
+    env_file:
+      - ../../.env
+    volumes:
+      - ../../data:/app/data
+      - ${OBSIDIAN_VAULT}:${OBSIDIAN_VAULT}
+    ports:
+      - "${WEB_PORT:-8081}:${WEB_PORT:-8081}"
+    restart: unless-stopped
