@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.config import Settings
 from app.db.connection import connect_database
-from app.obsidian.writer import export_receipt_note
-from app.receipts.repository import ReceiptRepository
+from app.obsidian.writer import export_receipt_note, write_receipt_note
+from app.receipts.repository import ReceiptDeleteError, ReceiptRepository
 from app.repositories.documents import (
     FILE_KIND_CLEAN_OCR,
     FILE_KIND_OBSIDIAN_ATTACHMENT,
@@ -105,6 +108,181 @@ def test_receipt_repository_lists_and_finds_db_documents_before_manifest_fallbac
     assert found.document_id == created.record.document_id
     image_file = next(file for file in found.file_records if file.kind == FILE_KIND_ORIGINAL_IMAGE)
     assert repository.file_path(image_file).read_text(encoding="utf-8") == "image"
+
+
+def test_delete_db_document_removes_files_and_soft_deletes_row(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    created = DocumentRepository(app_settings).create_confirmed_from_session(_session(app_settings, user_id=222), _parsed_receipt())
+    repository = ReceiptRepository(app_settings)
+    files = [repository.file_path(file) for file in created.record.file_records]
+
+    result = repository.delete_receipt(created.record.receipt_id, owner_user_id=222)
+
+    assert result.source == "db"
+    assert result.receipt_id == created.record.receipt_id
+    assert len(result.deleted) == len(files)
+    assert result.missing == []
+    assert all(not path.exists() for path in files)
+    assert repository.list_user_receipts(222) == []
+    with connect_database(app_settings) as connection:
+        document = connection.execute("select status, deleted_at from documents where id = ?", (created.record.document_id,)).fetchone()
+        file_count = connection.execute("select count(*) from document_files where document_id = ?", (created.record.document_id,)).fetchone()[0]
+    assert document["status"] == "deleted"
+    assert document["deleted_at"]
+    assert file_count == len(files)
+
+
+def test_delete_db_document_counts_missing_files(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    created = DocumentRepository(app_settings).create_confirmed_from_session(_session(app_settings, user_id=222), _parsed_receipt())
+    repository = ReceiptRepository(app_settings)
+    missing_file = next(file for file in created.record.file_records if file.kind == FILE_KIND_CLEAN_OCR)
+    repository.file_path(missing_file).unlink()
+
+    result = repository.delete_receipt(created.record.document_id, owner_user_id=111, allow_all_users=True)
+
+    assert len(result.missing) == 1
+    assert result.missing[0].name == "clean.hy.txt"
+    with connect_database(app_settings) as connection:
+        document = connection.execute("select status from documents where id = ?", (created.record.document_id,)).fetchone()
+    assert document["status"] == "deleted"
+
+
+def test_delete_db_document_rejects_unsafe_path_before_deleting(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    created = DocumentRepository(app_settings).create_confirmed_from_session(_session(app_settings, user_id=222), _parsed_receipt())
+    repository = ReceiptRepository(app_settings)
+    existing_paths = [repository.file_path(file) for file in created.record.file_records]
+    with connect_database(app_settings) as connection:
+        connection.execute(
+            """
+            update document_files
+            set path = ?
+            where document_id = ? and kind = ?
+            """,
+            ("../escape.jpg", created.record.document_id, FILE_KIND_ORIGINAL_IMAGE),
+        )
+
+    with pytest.raises(ReceiptDeleteError) as exc_info:
+        repository.delete_receipt(created.record.receipt_id, owner_user_id=222)
+
+    assert "../escape.jpg" in str(exc_info.value)
+    assert all(path.exists() for path in existing_paths)
+    with connect_database(app_settings) as connection:
+        document = connection.execute("select deleted_at from documents where id = ?", (created.record.document_id,)).fetchone()
+    assert document["deleted_at"] is None
+
+
+def test_delete_legacy_receipt_returns_vault_relative_note_path(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    legacy_artifact = write_receipt_note(app_settings, _legacy_session(tmp_path, user_id=222), _parsed_receipt())
+    repository = ReceiptRepository(app_settings)
+
+    result = repository.delete_receipt(legacy_artifact.receipt_id, owner_user_id=222)
+
+    assert result.source == "legacy"
+    assert result.note_path == legacy_artifact.note_path.relative_to(app_settings.obsidian_vault)
+
+
+def test_non_admin_cannot_delete_another_users_db_document(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    created = DocumentRepository(app_settings).create_confirmed_from_session(_session(app_settings, user_id=222), _parsed_receipt())
+    repository = ReceiptRepository(app_settings)
+    original_file = next(file for file in created.record.file_records if file.kind == FILE_KIND_ORIGINAL_IMAGE)
+
+    with pytest.raises(ReceiptDeleteError):
+        repository.delete_receipt(created.record.document_id, owner_user_id=333)
+
+    assert repository.file_path(original_file).exists()
+    assert repository.find_user_receipt(222, created.record.receipt_id) is not None
+
+
+def test_admin_global_delete_requires_document_id_for_ambiguous_file_stem(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    first = DocumentRepository(app_settings).create_confirmed_from_session(_session(app_settings, user_id=222, session_id="one"), _parsed_receipt())
+    second = DocumentRepository(app_settings).create_confirmed_from_session(_session(app_settings, user_id=333, session_id="two"), _parsed_receipt())
+    repository = ReceiptRepository(app_settings)
+
+    with pytest.raises(ReceiptDeleteError):
+        repository.delete_receipt(first.record.receipt_id, owner_user_id=111, allow_all_users=True)
+
+    result = repository.delete_receipt(second.record.document_id, owner_user_id=111, allow_all_users=True)
+    assert result.document_id == second.record.document_id
+    assert repository.find_user_receipt(333, second.record.receipt_id) is None
+    assert repository.find_user_receipt(222, first.record.receipt_id) is not None
+
+
+def test_copy_db_document_deep_copies_rows_and_files(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    source = DocumentRepository(app_settings).create_confirmed_from_session(_session(app_settings, user_id=222), _parsed_receipt())
+    repository = ReceiptRepository(app_settings)
+
+    copied = repository.copy_receipt_to_user(source.record.document_id, 333)
+
+    assert copied.source == "db"
+    assert copied.owner_user_id == 333
+    assert copied.document_id != source.record.document_id
+    assert copied.receipt_id == source.record.receipt_id
+    assert copied.note_rel.parts[:3] == ("Users", "333", "Receipts")
+    source_original = repository.file_path(next(file for file in source.record.file_records if file.kind == FILE_KIND_ORIGINAL_IMAGE))
+    copied_original = repository.file_path(next(file for file in copied.file_records if file.kind == FILE_KIND_ORIGINAL_IMAGE))
+    assert source_original != copied_original
+    assert copied_original.read_text(encoding="utf-8") == "image"
+    with connect_database(app_settings) as connection:
+        source_doc = connection.execute("select parsed_json, parser_version from documents where id = ?", (source.record.document_id,)).fetchone()
+        copied_doc = connection.execute("select parsed_json, parser_version from documents where id = ?", (copied.document_id,)).fetchone()
+        copied_items = connection.execute("select name_ru from document_items where document_id = ?", (copied.document_id,)).fetchall()
+    assert copied_doc["parsed_json"] == source_doc["parsed_json"]
+    assert copied_doc["parser_version"] == source_doc["parser_version"]
+    assert [row["name_ru"] for row in copied_items] == ["Пакет"]
+
+    repository.delete_receipt(source.record.document_id, owner_user_id=111, allow_all_users=True)
+    assert copied_original.exists()
+    assert repository.find_user_receipt(333, copied.receipt_id) is not None
+
+
+def test_copy_db_document_suffixes_target_file_stem_on_collision(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    repository = ReceiptRepository(app_settings)
+    source = DocumentRepository(app_settings).create_confirmed_from_session(_session(app_settings, user_id=222, session_id="source"), _parsed_receipt())
+    DocumentRepository(app_settings).create_confirmed_from_session(_session(app_settings, user_id=333, session_id="existing"), _parsed_receipt())
+
+    copied = repository.copy_receipt_to_user(source.record.document_id, 333)
+
+    assert copied.receipt_id == f"{source.record.receipt_id}_2"
+
+
+def test_export_user_receipts_includes_legacy_and_db_canonical_files(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    legacy_session = _legacy_session(tmp_path, user_id=222)
+    legacy_artifact = write_receipt_note(app_settings, legacy_session, _parsed_receipt())
+    db_created = DocumentRepository(app_settings).create_confirmed_from_session(_session(app_settings, user_id=222), _parsed_receipt(merchant="DB Store"))
+
+    archive_path = ReceiptRepository(app_settings).export_user_receipts(222)
+
+    with zipfile.ZipFile(archive_path) as archive:
+        names = set(archive.namelist())
+    assert "Receipts/2026/05/" + legacy_artifact.file_name in names
+    assert f"Canonical/{db_created.record.receipt_id}/original.jpg" in names
+    assert f"Canonical/{db_created.record.receipt_id}/clean.hy.txt" in names
+    assert f"Canonical/{db_created.record.receipt_id}/source.hy.txt" in names
+
+
+def test_export_user_receipts_includes_canonical_when_obsidian_export_missing(tmp_path: Path, monkeypatch) -> None:
+    app_settings = _settings(tmp_path)
+
+    def _boom(**kwargs):
+        raise RuntimeError("export failed")
+
+    monkeypatch.setattr("app.repositories.documents.export_receipt_note", _boom)
+    created = DocumentRepository(app_settings).create_confirmed_from_session(_session(app_settings, user_id=222), _parsed_receipt())
+
+    archive_path = ReceiptRepository(app_settings).export_user_receipts(222)
+
+    with zipfile.ZipFile(archive_path) as archive:
+        names = set(archive.namelist())
+    assert f"Canonical/{created.record.receipt_id}/original.jpg" in names
+    assert not any(name.startswith("Receipts/") for name in names)
 
 
 def test_export_receipt_note_ignores_non_list_possible_errors(tmp_path: Path) -> None:
@@ -253,6 +431,24 @@ def _session(app_settings: Settings, *, user_id: int, session_id: str = "session
     source.write_text("source ocr", encoding="utf-8")
     return ReceiptSession(
         session_id=session_id,
+        user_id=user_id,
+        image_path=image,
+        clean_ocr_path=clean,
+        source_ocr_path=source,
+        temporary_base_name="tmp",
+        created_at=created_at,
+    )
+
+
+def _legacy_session(tmp_path: Path, *, user_id: int) -> ReceiptSession:
+    created_at = datetime(2026, 5, 20, 12, 0, 0)
+    image = tmp_path / f"Users/{user_id}/Attachments/receipts/_tmp/2026/05/tmp.jpg"
+    clean = tmp_path / f"Users/{user_id}/OCR/2026/05/tmp.clean.hy.txt"
+    source = tmp_path / f"Users/{user_id}/OCR_VERIFIED/2026/05/tmp.verified.hy.txt"
+    for path in (image, clean, source):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("legacy", encoding="utf-8")
+    return ReceiptSession(
         user_id=user_id,
         image_path=image,
         clean_ocr_path=clean,

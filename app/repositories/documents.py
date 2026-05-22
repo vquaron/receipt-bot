@@ -28,6 +28,7 @@ from app.users.paths import user_dated_relpath
 
 
 DOCUMENT_STATUS_CONFIRMED = "confirmed"
+DOCUMENT_STATUS_DELETED = "deleted"
 DOCUMENT_STATUS_EXPORT_FAILED = "export_failed"
 
 FILE_KIND_ORIGINAL_IMAGE = "original_image"
@@ -45,6 +46,19 @@ PROMPT_VERSION = "prompt_v1"
 class DocumentCreateResult:
     record: ReceiptRecord
     artifact: ReceiptArtifact | None
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentDeleteResult:
+    record: ReceiptRecord
+    deleted: list[Path]
+    missing: list[Path]
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentArchiveFile:
+    path: Path
+    archive_name: str
 
 
 class DocumentRepository:
@@ -143,6 +157,20 @@ class DocumentRepository:
                 (status, datetime.now().isoformat(), document_id),
             )
 
+    def mark_deleted(self, document_id: str) -> None:
+        now = datetime.now().isoformat()
+        with connect_database(self.settings) as connection:
+            connection.execute(
+                """
+                update documents
+                set status = ?,
+                    deleted_at = ?,
+                    updated_at = ?
+                where id = ?
+                """,
+                (DOCUMENT_STATUS_DELETED, now, now, document_id),
+            )
+
     def add_file(self, document_id: str, kind: str, path: Path, *, storage_root: str) -> None:
         root = self.settings.app_storage_dir if storage_root == "app" else self.settings.obsidian_vault
         with connect_database(self.settings) as connection:
@@ -193,17 +221,228 @@ class DocumentRepository:
             files = _files_by_document(connection, [str(row["id"])]).get(str(row["id"]), ())
         return _record_from_document_row(row, files)
 
+    def get_any_document(self, query: str) -> ReceiptRecord | None:
+        cleaned = query.strip().strip('"').strip("'")
+        if not cleaned:
+            return None
+        cleaned_stem = Path(cleaned).stem
+        with connect_database(self.settings) as connection:
+            exact = connection.execute(
+                """
+                select *
+                from documents
+                where id = ?
+                  and deleted_at is null
+                limit 1
+                """,
+                (cleaned,),
+            ).fetchone()
+            if exact is not None:
+                files = _files_by_document(connection, [str(exact["id"])]).get(str(exact["id"]), ())
+                return _record_from_document_row(exact, files)
+
+            rows = connection.execute(
+                """
+                select *
+                from documents
+                where deleted_at is null
+                  and (file_stem = ? or file_stem = ?)
+                order by created_at desc
+                """,
+                (cleaned, cleaned_stem),
+            ).fetchall()
+            if len(rows) > 1:
+                raise DocumentAmbiguousError("Several DB documents share this receipt_id. Use the full document id.")
+            if not rows:
+                return None
+            row = rows[0]
+            files = _files_by_document(connection, [str(row["id"])]).get(str(row["id"]), ())
+        return _record_from_document_row(row, files)
+
+    def delete_document(self, record: ReceiptRecord) -> DocumentDeleteResult:
+        if not record.document_id:
+            raise DocumentStorageError("Document id is required for DB delete.")
+        targets = self._validated_file_targets(record.file_records)
+        deleted: list[Path] = []
+        missing: list[Path] = []
+        for path in targets:
+            if path.exists():
+                path.unlink()
+                deleted.append(path)
+            else:
+                missing.append(path)
+        self.mark_deleted(record.document_id)
+        return DocumentDeleteResult(record=record, deleted=deleted, missing=missing)
+
+    def copy_document_to_user(self, source: ReceiptRecord, target_user_id: int) -> DocumentCreateResult:
+        if not source.document_id:
+            raise DocumentStorageError("Document id is required for DB copy.")
+        with connect_database(self.settings) as connection:
+            row = connection.execute(
+                """
+                select *
+                from documents
+                where id = ? and deleted_at is null
+                """,
+                (source.document_id,),
+            ).fetchone()
+            if row is None:
+                raise DocumentStorageError("Source document was not found.")
+            item_rows = connection.execute(
+                """
+                select *
+                from document_items
+                where document_id = ?
+                order by position
+                """,
+                (source.document_id,),
+            ).fetchall()
+            files = _files_by_document(connection, [source.document_id]).get(source.document_id, ())
+
+        new_document_id = uuid4().hex
+        parsed = _json_object(row["parsed_json"])
+        note_date, _used_fallback = _resolve_note_date(str(row["date"] or ""))
+        file_stem = self._next_available_file_stem(
+            target_user_id=target_user_id,
+            base_stem=str(row["file_stem"] or source.receipt_id),
+            note_date=note_date,
+        )
+        document_root = self.settings.app_storage_dir / "documents" / new_document_id
+        canonical_files = [file for file in files if file.storage == "app"]
+        copied: list[tuple[ReceiptFileRecord, Path]] = []
+        now = datetime.now()
+
+        try:
+            for file in canonical_files:
+                source_path = self.file_path(file)
+                if not source_path.exists() or not source_path.is_file():
+                    raise DocumentStorageError(f"Source canonical file is missing: {file.path.as_posix()}")
+                target_path = document_root / file.path.name
+                ensure_parent(target_path)
+                shutil.copy2(source_path, target_path)
+                copied.append((file, target_path))
+
+            with connect_database(self.settings) as connection:
+                connection.execute("begin immediate")
+                _insert_document(
+                    connection,
+                    document_id=new_document_id,
+                    user_id=target_user_id,
+                    document_type=str(row["document_type"]),
+                    status=DOCUMENT_STATUS_CONFIRMED,
+                    file_stem=file_stem,
+                    parsed=parsed,
+                    created_at=now,
+                    reviewed_at=datetime.fromisoformat(str(row["reviewed_at"] or row["created_at"])),
+                    ocr_text_hash=str(row["ocr_text_hash"] or ""),
+                    parser_version=str(row["parser_version"] or PARSER_VERSION),
+                    schema_version=str(row["schema_version"] or PARSED_SCHEMA_VERSION),
+                    prompt_version=str(row["prompt_version"] or PROMPT_VERSION),
+                )
+                _copy_item_rows(
+                    connection,
+                    document_id=new_document_id,
+                    item_rows=item_rows,
+                    created_at=now,
+                )
+                for file, target_path in copied:
+                    _insert_file(
+                        connection,
+                        document_id=new_document_id,
+                        kind=file.kind,
+                        path=_relative_to(self.settings.app_storage_dir, target_path),
+                        absolute_path=target_path,
+                        created_at=now,
+                    )
+        except Exception:
+            for _file, target in reversed(copied):
+                if target.exists():
+                    target.unlink()
+            raise
+
+        artifact: ReceiptArtifact | None = None
+        original = self._first_existing_canonical(new_document_id, FILE_KIND_ORIGINAL_IMAGE)
+        if original is not None:
+            try:
+                artifact = export_receipt_note(
+                    self.settings,
+                    user_id=target_user_id,
+                    file_stem=file_stem,
+                    document_type=str(row["document_type"]),
+                    parsed=parsed,
+                    source_image_path=original,
+                )
+                self.add_file(new_document_id, FILE_KIND_OBSIDIAN_NOTE, artifact.note_path, storage_root="vault")
+                if artifact.attachment_path is not None:
+                    self.add_file(new_document_id, FILE_KIND_OBSIDIAN_ATTACHMENT, artifact.attachment_path, storage_root="vault")
+            except Exception:
+                self.update_status(new_document_id, DOCUMENT_STATUS_EXPORT_FAILED)
+                artifact = None
+
+        record = self.get_user_document(target_user_id, file_stem)
+        if record is None:
+            raise DocumentStorageError("Copied document could not be read back.")
+        return DocumentCreateResult(record=record, artifact=artifact)
+
+    def archive_files_for_user(self, user_id: int) -> list[DocumentArchiveFile]:
+        result: list[DocumentArchiveFile] = []
+        for record in self.list_user_documents(user_id):
+            for file in record.file_records:
+                if file.storage != "app":
+                    continue
+                path = self.file_path(file)
+                if not path.exists():
+                    continue
+                if not path.is_file():
+                    raise DocumentStorageError(f"Refusing to export non-file path: {file.path.as_posix()}")
+                result.append(
+                    DocumentArchiveFile(
+                        path=path,
+                        archive_name=f"Canonical/{record.receipt_id}/{file.path.name}",
+                    )
+                )
+        return result
+
     def file_path(self, file_record: ReceiptFileRecord) -> Path:
         root = self.settings.app_storage_dir if file_record.storage == "app" else self.settings.obsidian_vault
         if file_record.storage == "vault":
             return safe_vault_path(root, file_record.path)
         return _safe_storage_path(root, file_record.path)
 
+    def _validated_file_targets(self, files: tuple[ReceiptFileRecord, ...]) -> list[Path]:
+        targets: list[Path] = []
+        for file in files:
+            try:
+                target = self.file_path(file)
+            except ValueError as exc:
+                raise DocumentStorageError(
+                    f"Refusing to use path outside configured storage roots: {file.kind} {file.path.as_posix()}"
+                ) from exc
+            if target.exists() and not target.is_file():
+                raise DocumentStorageError(f"Refusing to delete non-file path: {file.path.as_posix()}")
+            targets.append(target)
+        return _dedupe_paths(targets)
+
+    def _first_existing_canonical(self, document_id: str, kind: str) -> Path | None:
+        record = self.get_any_document(document_id)
+        if record is None:
+            return None
+        for file in record.file_records:
+            if file.kind != kind:
+                continue
+            path = self.file_path(file)
+            if path.exists() and path.is_file():
+                return path
+        return None
+
     def _next_file_stem(self, *, user_id: int, note_date: date, merchant: str, amount: str) -> str:
         base_stem = f"{note_date.isoformat()}_{slugify_merchant(merchant)}_{amount_for_filename(amount)}AMD"
+        return self._next_available_file_stem(target_user_id=user_id, base_stem=base_stem, note_date=note_date)
+
+    def _next_available_file_stem(self, *, target_user_id: int, base_stem: str, note_date: date) -> str:
         receipt_dir = self.settings.obsidian_vault / user_dated_relpath(
             self.settings,
-            user_id,
+            target_user_id,
             "Receipts",
             datetime(note_date.year, note_date.month, note_date.day),
             "",
@@ -219,12 +458,16 @@ class DocumentRepository:
                     where owner_telegram_user_id = ? and file_stem = ?
                     limit 1
                     """,
-                    (user_id, candidate),
+                    (target_user_id, candidate),
                 ).fetchone()
                 if row is None and not (receipt_dir / f"{candidate}.md").exists():
                     return candidate
                 candidate = f"{base_stem}_{counter}"
                 counter += 1
+
+
+class DocumentAmbiguousError(RuntimeError):
+    pass
 
 
 class DocumentStorageError(RuntimeError):
@@ -243,6 +486,9 @@ def _insert_document(
     created_at: datetime,
     reviewed_at: datetime,
     ocr_text_hash: str,
+    parser_version: str = PARSER_VERSION,
+    schema_version: str = PARSED_SCHEMA_VERSION,
+    prompt_version: str = PROMPT_VERSION,
 ) -> None:
     review_payload = build_review_payload(parsed)
     possible_errors = review_payload.get("possible_errors", [])
@@ -291,9 +537,9 @@ def _insert_document(
             json.dumps(possible_errors if isinstance(possible_errors, list) else [], ensure_ascii=False),
             ocr_text_hash,
             file_stem,
-            PARSER_VERSION,
-            PARSED_SCHEMA_VERSION,
-            PROMPT_VERSION,
+            parser_version,
+            schema_version,
+            prompt_version,
             created_at.isoformat(),
             created_at.isoformat(),
             reviewed_at.isoformat(),
@@ -342,6 +588,49 @@ def _insert_items(
                 str(item.get("quantity", "")),
                 str(item.get("unit", "")),
                 str(item.get("line_total", "")),
+                created_at.isoformat(),
+            ),
+        )
+
+
+def _copy_item_rows(
+    connection: sqlite3.Connection,
+    *,
+    document_id: str,
+    item_rows: list[sqlite3.Row],
+    created_at: datetime,
+) -> None:
+    for row in item_rows:
+        connection.execute(
+            """
+            insert into document_items(
+                document_id,
+                position,
+                name_original,
+                name_ru,
+                name_en,
+                unit_price,
+                quantity,
+                unit,
+                line_total,
+                confidence,
+                possible_error,
+                created_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                document_id,
+                int(row["position"]),
+                row["name_original"],
+                row["name_ru"],
+                row["name_en"],
+                row["unit_price"],
+                row["quantity"],
+                row["unit"],
+                row["line_total"],
+                row["confidence"],
+                row["possible_error"],
                 created_at.isoformat(),
             ),
         )
@@ -450,6 +739,14 @@ def _final_parsed(parsed: dict[str, object]) -> tuple[dict[str, object], date]:
     return normalized, note_date
 
 
+def _json_object(value: object) -> dict[str, object]:
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _resolve_note_date(value: str) -> tuple[date, bool]:
     if value:
         try:
@@ -475,6 +772,17 @@ def _storage_for_kind(kind: str) -> str:
     if kind in {FILE_KIND_ORIGINAL_IMAGE, FILE_KIND_CLEAN_OCR, FILE_KIND_SOURCE_OCR}:
         return "app"
     return "vault"
+
+
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    seen: set[Path] = set()
+    result: list[Path] = []
+    for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        result.append(path)
+    return result
 
 
 def _normalized_possible_errors(value: object) -> list[str]:

@@ -122,6 +122,27 @@ note/image rows only as export files. New manifest JSON files are not created.
 images, EXIF stripping, or original-image retention settings change the storage
 contract.
 
+### 2026-05-22 - Soft-delete DB documents after file deletion
+
+**Status:** active
+**Decision:** DB-first document deletion removes files recorded in
+`document_files`, but keeps the document, item, and file rows with
+`documents.status='deleted'` and `deleted_at` set.
+**Context:** New receipts no longer have manifest JSON as their source of truth,
+so deletion must use SQLite file records while still preserving enough audit
+history to understand what happened.
+**Reason:** Soft-deleted rows keep document identity, ownership, and file
+metadata available for audit and future health checks, while removing the
+private file payloads from storage.
+**Alternatives considered:** Hard-delete DB rows with cascade; only mark rows
+deleted and keep files. Hard delete loses audit/debug context; soft-only delete
+does not address storage and privacy cleanup.
+**Impact:** Normal listings hide deleted documents. Admin/user delete validates
+all recorded file paths before removing files, treats missing files as
+non-fatal, and only then marks the DB row deleted.
+**Review trigger:** Revisit if a future formal audit log makes soft-deleted
+document rows redundant or if retention policy requires delayed deletion.
+
 ### 2026-05-21 - Telegram as current review UI
 
 **Status:** active  

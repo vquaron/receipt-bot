@@ -2,6 +2,46 @@
 
 ## 2026-05-22
 
+### Make delete, grant, and export DB-first
+
+**Summary:** Moved receipt deletion, admin grant/copy, and user ZIP export to
+DB-first behavior for new documents while keeping manifest/Markdown fallback for
+legacy receipts.
+**Files changed:**
+
+- `app/repositories/documents.py`
+- `app/receipts/repository.py`
+- `app/telegram/handlers/delete.py`
+- `tests/test_documents_repository.py`
+- `docs/PROJECT_STATE.md`
+- `docs/DECISIONS.md`
+- `docs/TASK_LOG.md`
+- `docs/NEXT_STEPS.md`
+- `README.md`
+
+**Details:**
+
+- DB delete validates recorded file paths, deletes existing app/vault files,
+  counts missing files, and soft-deletes the document row with `deleted_at`.
+- Admin global delete can use exact document ids; ambiguous `file_stem` matches
+  are rejected.
+- DB grant deep-copies canonical files and item/document rows to a new document
+  id for the target user, then regenerates Obsidian export.
+- User ZIP export now includes legacy Obsidian files plus DB canonical files
+  under `Canonical/<receipt_id>/`.
+- Legacy manifest-backed delete/copy/export remains as fallback.
+
+**Reason:** After DB-first document creation, receipt management commands should
+operate from SQLite and `document_files` instead of relying on manifests that
+new receipts no longer create.
+**Validation:** `./.venv/bin/python -m pytest -q` passed.
+**Follow-ups:** Implement file retention/image policy and migrate correction
+rules to SQLite.
+**Related decisions:** `2026-05-21 - SQLite as source of truth`;
+`2026-05-21 - Obsidian as export / representation`;
+`2026-05-22 - Canonical document files in app storage`;
+`2026-05-22 - Soft-delete DB documents after file deletion`.
+
 ### Make documents, items, and files DB-first
 
 **Summary:** Moved confirmed receipt/order persistence to SQLite documents,
