@@ -10,7 +10,7 @@ from app.config import Settings
 from app.db.connection import connect_database
 from app.repositories.usage import RECEIPT_ATTEMPT_EVENT
 from app.users.models import UserRole
-from app.users.quotas import QuotaService
+from app.users.quotas import QuotaService, QuotaStorageError
 
 
 def settings(tmp_path: Path, **overrides) -> Settings:
@@ -110,6 +110,14 @@ def test_explicit_order_attempt_keeps_order_document_type(tmp_path: Path) -> Non
 
     assert attempt.allowed
     assert _document_type(app_settings, 222) == "order"
+
+
+def test_attempt_document_type_update_raises_for_missing_event(tmp_path: Path) -> None:
+    app_settings = settings(tmp_path)
+    quota = QuotaService(app_settings)
+
+    with pytest.raises(QuotaStorageError):
+        quota.update_attempt_document_type(999_999, "order")
 
 
 def test_quota_storage_does_not_create_usage_json_files(tmp_path: Path) -> None:

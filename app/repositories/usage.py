@@ -57,7 +57,7 @@ class UsageRepository:
 
     def update_event_document_type(self, event_id: int, document_type: str) -> None:
         with connect_database(self.settings) as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 update usage_events
                 set document_type = ?
@@ -65,6 +65,19 @@ class UsageRepository:
                 """,
                 (document_type, event_id, RECEIPT_ATTEMPT_EVENT),
             )
+            if cursor.rowcount != 0:
+                return
+            row = connection.execute(
+                """
+                select 1
+                from usage_events
+                where id = ? and event_type = ?
+                limit 1
+                """,
+                (event_id, RECEIPT_ATTEMPT_EVENT),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Usage event not found for id={event_id} and event_type={RECEIPT_ATTEMPT_EVENT}.")
 
     def count_events(
         self,
