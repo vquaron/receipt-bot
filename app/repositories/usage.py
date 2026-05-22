@@ -20,6 +20,7 @@ LEGACY_RECEIPT_ACTION = "receipt_process"
 class UsageAttemptResult:
     allowed: bool
     reason: str = ""
+    event_id: int | None = None
     daily_used: int = 0
     daily_limit: int = 0
     monthly_used: int = 0
@@ -41,10 +42,10 @@ class UsageRepository:
         document_type: str = "",
         created_at: datetime | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> int:
         created_at = created_at or datetime.now()
         with connect_database(self.settings) as connection:
-            _insert_event(
+            return _insert_event(
                 connection,
                 user_id=user_id,
                 event_type=_normalize_event_type(event_type),
@@ -53,6 +54,30 @@ class UsageRepository:
                 created_at=created_at,
                 metadata=metadata,
             )
+
+    def update_event_document_type(self, event_id: int, document_type: str) -> None:
+        with connect_database(self.settings) as connection:
+            cursor = connection.execute(
+                """
+                update usage_events
+                set document_type = ?
+                where id = ? and event_type = ?
+                """,
+                (document_type, event_id, RECEIPT_ATTEMPT_EVENT),
+            )
+            if cursor.rowcount != 0:
+                return
+            row = connection.execute(
+                """
+                select 1
+                from usage_events
+                where id = ? and event_type = ?
+                limit 1
+                """,
+                (event_id, RECEIPT_ATTEMPT_EVENT),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Usage event not found for id={event_id} and event_type={RECEIPT_ATTEMPT_EVENT}.")
 
     def count_events(
         self,
@@ -113,6 +138,7 @@ class UsageRepository:
                 return UsageAttemptResult(
                     allowed=False,
                     reason="daily_limit",
+                    event_id=None,
                     daily_used=daily_used,
                     daily_limit=daily_limit,
                     monthly_used=monthly_used,
@@ -122,12 +148,13 @@ class UsageRepository:
                 return UsageAttemptResult(
                     allowed=False,
                     reason="monthly_limit",
+                    event_id=None,
                     daily_used=daily_used,
                     daily_limit=daily_limit,
                     monthly_used=monthly_used,
                     monthly_limit=monthly_limit,
                 )
-            _insert_event(
+            event_id = _insert_event(
                 connection,
                 user_id=user_id,
                 event_type=RECEIPT_ATTEMPT_EVENT,
@@ -137,6 +164,7 @@ class UsageRepository:
             )
             return UsageAttemptResult(
                 allowed=True,
+                event_id=event_id,
                 daily_used=daily_used,
                 daily_limit=daily_limit,
                 monthly_used=monthly_used,
@@ -182,8 +210,8 @@ def _insert_event(
     document_type: str = "",
     created_at: datetime,
     metadata: dict[str, Any] | None = None,
-) -> None:
-    connection.execute(
+) -> int:
+    cursor = connection.execute(
         """
         insert into usage_events(
             telegram_user_id,
@@ -204,6 +232,7 @@ def _insert_event(
             json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True),
         ),
     )
+    return int(cursor.lastrowid)
 
 
 def _count_events(

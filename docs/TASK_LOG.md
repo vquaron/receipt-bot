@@ -2,6 +2,46 @@
 
 ## 2026-05-22
 
+### Cleanup storage PR1-PR3 decisions and quota audit events
+
+**Summary:** Tightened usage event audit data and removed runtime legacy access
+JSON import after the SQLite access/quota migration.
+**Files changed:**
+
+- `app/repositories/usage.py`
+- `app/users/quotas.py`
+- `app/telegram/handlers/receipt.py`
+- `app/repositories/users.py`
+- `app/users/access_service.py`
+- `tests/test_access_control.py`
+- `tests/test_usage_events.py`
+- `README.md`
+- `docs/PROJECT_STATE.md`
+- `docs/DECISIONS.md`
+- `docs/TASK_LOG.md`
+
+**Details:**
+
+- `receipt_attempt` quota events now return their SQLite id, store a role
+  snapshot in `metadata_json`, and can be updated to the final document type
+  after OCR-based classification.
+- Automatic `data/access.json` import was removed from runtime access startup.
+- Documented decisions from PR1/PR2 review: schema-ahead DB foundations,
+  Telegram owner ids without users FK, local server timestamps, and `file_stem`
+  as export identity.
+
+**Reason:** Follow-up review found small but important audit/documentation gaps
+after PR1-PR3.
+**Validation:** `./.venv/bin/python -m pytest -q` passed; `git diff --check`
+passed.
+**Follow-ups:** Continue with PR4: move processing sessions to SQLite and move
+temporary files out of the Obsidian vault.
+**Related decisions:** `2026-05-22 - Event-based quotas in SQLite`;
+`2026-05-22 - SQLite schema can lead runtime implementation`;
+`2026-05-22 - Telegram owner id without users foreign key`;
+`2026-05-22 - Local server timestamps for MVP`;
+`2026-05-22 - File stem as export identity`.
+
 ### Move quotas to SQLite usage events
 
 **Summary:** Replaced JSON quota counters with SQLite `usage_events` for

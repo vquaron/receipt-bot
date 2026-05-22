@@ -171,7 +171,7 @@ data/sessions/
 data/corrections.json
 ```
 
-Если остался старый `data/access.json`, бот один раз импортирует валидных legacy-пользователей и заявки в SQLite. Новые `data/users/users.json` и `data/users/access_requests.json` больше не являются основным хранилищем.
+`data/access.json`, `data/users/users.json` и `data/users/access_requests.json` больше не являются runtime-хранилищем и не импортируются автоматически. Доступ задаётся через `.env` bootstrap и меняется через SQLite-backed Telegram approval flow.
 
 Если пользователь не в allowlist, бот не скачивает фото, не вызывает Google Vision, не вызывает OpenAI и не создаёт файлы. Вместо этого создаётся pending-заявка, а всем администраторам приходит сообщение с кнопками `Approve` / `Reject`.
 
@@ -197,7 +197,7 @@ PRIVILEGED_DAILY_RECEIPT_LIMIT=0
 PRIVILEGED_MONTHLY_RECEIPT_LIMIT=0
 ```
 
-`0` означает `unlimited`. Лимит считается по событиям `receipt_attempt` в SQLite: попытка списывается после проверки доступа и лимита, но до скачивания изображения, OCR и OpenAI. Поэтому пользователь с исчерпанным лимитом не запускает OCR/OpenAI и не создаёт файлы. Старые JSON-счётчики в `data/usage` не импортируются и удаляются при инициализации quota storage.
+`0` означает `unlimited`. Лимит считается по событиям `receipt_attempt` в SQLite: попытка списывается после проверки доступа и лимита, но до скачивания изображения, OCR и OpenAI. Событие хранит snapshot роли и финальный тип документа, если он был определён автоматически после OCR. Поэтому пользователь с исчерпанным лимитом не запускает OCR/OpenAI и не создаёт файлы. Старые JSON-счётчики в `data/usage` не импортируются и удаляются при инициализации quota storage.
 
 ## 8. Структура Obsidian vault
 

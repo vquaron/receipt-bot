@@ -80,8 +80,8 @@ Telegram photo or /order caption
 
 - `app/config.py` - typed settings, env and `*_FILE` secrets, storage paths.
 - `app/db/` - SQLite connection, schema, and migrations.
-- `app/repositories/` - DB-backed repositories. Currently users and access
-  requests are implemented here.
+- `app/repositories/` - DB-backed repositories. Currently users, access
+  requests, and usage events are implemented here.
 - `app/users/` - access service, user roles/statuses, quota service, user paths.
 - `app/telegram/` - bot startup, logging, handlers for access, receipts, delete,
   and common runtime state.
@@ -143,7 +143,7 @@ Current user access model:
 - Unauthorized users can create a pending access request.
 - Admins can approve, reject, list users, and revoke access from Telegram.
 - Users and access requests are stored in SQLite.
-- Legacy `data/access.json` is imported once when present.
+- Legacy `data/access.json` is not imported automatically.
 
 Current quotas:
 
@@ -155,6 +155,8 @@ Current quotas:
   OCR, and OpenAI.
 - Admin and privileged attempts are also recorded for audit even when their
   limits are unlimited.
+- Usage events store the role snapshot in `metadata_json` and the final
+  `document_type` when automatic classification happens after OCR.
 - Legacy JSON counters in `data/usage` are not imported and are cleaned up.
 
 Future web authorization:

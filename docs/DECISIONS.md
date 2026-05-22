@@ -124,8 +124,9 @@ and later integration with web sessions and audit logic.
 Those files are simpler but are weak for multi-user growth and state
 transitions.  
 **Impact:** `app.repositories.users` and `app.repositories.access_requests`
-back the current access service. Legacy `data/access.json` is only an import
-source.  
+back the current access service. Legacy `data/access.json` is not imported
+automatically; `.env` bootstrap and Telegram admin actions are the supported
+runtime paths.
 **Review trigger:** Revisit if roles/permissions expand enough to require a more
 formal policy layer.
 
@@ -144,9 +145,78 @@ count only successful receipts. Import/fallback would complicate the MVP;
 success-only counting would not protect OCR/OpenAI cost.
 **Impact:** Telegram photo handling must use an atomic quota check-and-record
 operation before downloading the image. Admin and privileged attempts are
-recorded for audit even when unlimited.
+recorded for audit even when unlimited. Usage events store a role snapshot and
+should be updated to the final `document_type` if OCR-based classification
+changes the initial type.
 **Review trigger:** Revisit if users need historical usage migration or if
 future pricing requires separate limits for OCR/OpenAI calls.
+
+### 2026-05-22 - SQLite schema can lead runtime implementation
+
+**Status:** active
+**Decision:** The SQLite schema may include planned tables/columns before the
+runtime pipeline fully uses them, as long as docs distinguish implemented
+behavior from target architecture.
+**Context:** PR1 introduced document, file, session, correction, magic-link, and
+web-session foundations before runtime migration reached those layers.
+**Reason:** A schema-ahead foundation keeps later PRs smaller while preserving a
+coherent storage direction.
+**Alternatives considered:** Add tables only when each runtime feature lands.
+That would reduce unused schema but make each storage PR noisier.
+**Impact:** Future docs must keep "current implementation" and "target storage"
+separate so planned schema is not mistaken for wired behavior.
+**Review trigger:** Revisit if schema drift becomes confusing or unused tables
+block migration changes.
+
+### 2026-05-22 - Telegram owner id without users foreign key
+
+**Status:** active
+**Decision:** Document ownership is represented by stable
+`owner_telegram_user_id` values rather than a foreign key to `users`.
+**Context:** `users` is an access/profile table whose rows can be revoked,
+recreated, or bootstrapped from `.env`, while documents should remain tied to
+the external Telegram identity.
+**Reason:** This avoids coupling receipt ownership to mutable access state and
+keeps imported/exported document ownership simple.
+**Alternatives considered:** Add a DB foreign key from documents to users. That
+would enforce referential integrity but make access/profile cleanup riskier for
+document history.
+**Impact:** Repository/business logic must enforce user visibility; SQLite will
+not enforce document owner existence through a users FK.
+**Review trigger:** Revisit if the project introduces internal immutable user
+ids distinct from Telegram ids.
+
+### 2026-05-22 - Local server timestamps for MVP
+
+**Status:** active
+**Decision:** Runtime DB timestamps use local server time for the current MVP.
+**Context:** Existing quota limits and processing timestamps already follow
+`datetime.now()` behavior.
+**Reason:** This keeps day/month quota windows aligned with current production
+behavior and avoids mixing timezone policies mid-migration.
+**Alternatives considered:** Store UTC everywhere immediately. UTC is cleaner
+long-term, but changing it now would require a wider timestamp policy migration.
+**Impact:** Quota windows use half-open local day/month ranges. Future API/PWA
+work should revisit display and storage timezone policy before public web auth.
+**Review trigger:** Revisit before multi-timezone users, analytics, or public API
+date filtering.
+
+### 2026-05-22 - File stem as export identity
+
+**Status:** active
+**Decision:** `documents.id` is the canonical document identity; `file_stem` is a
+human-readable export/display identity used for Markdown, manifests, and file
+paths.
+**Context:** Receipt filenames need readable merchant/date/amount stems, but
+those values can collide or change after review.
+**Reason:** Separating canonical id from export stem keeps DB references stable
+while retaining readable exported files.
+**Alternatives considered:** Use filename stem as primary identity. That would
+make renames/collisions harder and leak display concerns into DB relationships.
+**Impact:** Future DB-first document code should use document id for internal
+links and `file_stem` only for export/file naming.
+**Review trigger:** Revisit if export naming becomes user-editable or if multiple
+exports per document are introduced.
 
 ### 2026-05-21 - Atomic per-migration SQLite changes
 

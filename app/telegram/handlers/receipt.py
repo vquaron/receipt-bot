@@ -140,6 +140,17 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         classification = classify_document_type(clean_ocr)
         document_type = classification.document_type
         document_genitive = document_genitive_ru(document_type)
+        if quota.event_id is not None:
+            try:
+                quotas(context).update_attempt_document_type(quota.event_id, document_type)
+            except QuotaStorageError:
+                LOGGER.warning(
+                    "Failed to update quota event document_type user_id=%s event_id=%s document_type=%s",
+                    user_id,
+                    quota.event_id,
+                    document_type,
+                    exc_info=True,
+                )
         LOGGER.info(
             "Detected document type for user_id=%s type=%s confidence=%.2f reason=%s receipt_score=%s order_score=%s",
             user_id,

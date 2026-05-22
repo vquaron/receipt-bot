@@ -99,6 +99,8 @@
 
 - DB schema can get ahead of runtime code; docs must distinguish implemented
   behavior from planned schema.
+- Legacy JSON access import should not be reintroduced; `.env` bootstrap and
+  SQLite-backed admin approval are the supported access paths.
 - Markdown/manifest fallback should not quietly become the source of truth again.
 - Temporary vault files and debug files can leak storage and private data if not
   cleaned up.

@@ -17,6 +17,7 @@ class QuotaStorageError(RuntimeError):
 class QuotaDecision:
     allowed: bool
     reason: str = ""
+    event_id: int | None = None
     daily_used: int = 0
     daily_limit: int = 0
     monthly_used: int = 0
@@ -64,10 +65,30 @@ class QuotaService:
         except (OSError, sqlite3.Error, ValueError) as exc:
             raise QuotaStorageError("Failed to read quota usage.") from exc
         if daily_limit and daily_used >= daily_limit:
-            return QuotaDecision(False, "daily_limit", daily_used, daily_limit, monthly_used, monthly_limit)
+            return QuotaDecision(
+                allowed=False,
+                reason="daily_limit",
+                daily_used=daily_used,
+                daily_limit=daily_limit,
+                monthly_used=monthly_used,
+                monthly_limit=monthly_limit,
+            )
         if monthly_limit and monthly_used >= monthly_limit:
-            return QuotaDecision(False, "monthly_limit", daily_used, daily_limit, monthly_used, monthly_limit)
-        return QuotaDecision(True, "", daily_used, daily_limit, monthly_used, monthly_limit)
+            return QuotaDecision(
+                allowed=False,
+                reason="monthly_limit",
+                daily_used=daily_used,
+                daily_limit=daily_limit,
+                monthly_used=monthly_used,
+                monthly_limit=monthly_limit,
+            )
+        return QuotaDecision(
+            allowed=True,
+            daily_used=daily_used,
+            daily_limit=daily_limit,
+            monthly_used=monthly_used,
+            monthly_limit=monthly_limit,
+        )
 
     def check_and_record_attempt(
         self,
@@ -85,12 +106,14 @@ class QuotaService:
                 monthly_limit=monthly_limit,
                 document_type=document_type,
                 created_at=now,
+                metadata={"role": role.value},
             )
         except (OSError, sqlite3.Error, ValueError) as exc:
             raise QuotaStorageError("Failed to record quota usage.") from exc
         return QuotaDecision(
             allowed=result.allowed,
             reason=result.reason,
+            event_id=result.event_id,
             daily_used=result.daily_used,
             daily_limit=result.daily_limit,
             monthly_used=result.monthly_used,
@@ -102,6 +125,12 @@ class QuotaService:
             self.repository.record_event(user_id, action, created_at=now)
         except (OSError, sqlite3.Error, ValueError) as exc:
             raise QuotaStorageError("Failed to record quota usage.") from exc
+
+    def update_attempt_document_type(self, event_id: int, document_type: str) -> None:
+        try:
+            self.repository.update_event_document_type(event_id, document_type)
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            raise QuotaStorageError("Failed to update quota event document type.") from exc
 
     def _limits(self, role: UserRole) -> tuple[int, int]:
         if role == UserRole.ADMIN:
