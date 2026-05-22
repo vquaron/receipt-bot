@@ -168,6 +168,48 @@ non-fatal, and only then marks the DB row deleted.
 **Review trigger:** Revisit if a future formal audit log makes soft-deleted
 document rows redundant or if retention policy requires delayed deletion.
 
+### 2026-05-22 - Runtime retention cleanup for non-canonical artifacts
+
+**Status:** active
+**Decision:** Runtime cleanup removes old export ZIPs, debug artifacts, and
+materialized temp/cache files, but does not delete canonical document files.
+**Context:** S3-backed images introduced temporary materialized local copies, and
+export/debug files can contain private receipt data while growing without bound.
+**Reason:** Non-canonical artifacts should not become accidental long-term
+storage. Canonical files remain controlled by `document_files` delete/retention
+policy instead of generic age-based cleanup.
+**Alternatives considered:** Leave cleanup manual; delete all files under
+`data/tmp`; keep OpenAI debug in Obsidian. Manual cleanup is easy to forget;
+broad tmp cleanup risks active sessions; vault debug files can sync private raw
+LLM output.
+**Impact:** Startup cleanup applies configured retention to
+`EXPORT_STORAGE_DIR`, `DEBUG_STORAGE_DIR`, and selected temp cache directories:
+`materialized`, `exports`, and `telegram`.
+**Review trigger:** Revisit when role-specific retention settings or admin
+storage controls are implemented.
+
+### 2026-05-22 - OCR_VERIFIED is legacy-only
+
+**Status:** active
+**Decision:** `OCR_VERIFIED` remains supported for legacy Obsidian/manifest
+receipts, but new DB-first documents do not create permanent `OCR_VERIFIED`
+files.
+**Context:** Manual review now happens on Russian note/export fields, while new
+DB-first documents store canonical OCR artifacts in app storage and record them
+in SQLite `document_files`.
+**Reason:** A permanent `OCR_VERIFIED` copy would imply Armenian OCR was manually
+verified, which is no longer the product workflow. Keeping legacy fallback avoids
+breaking old receipts.
+**Alternatives considered:** Continue creating `OCR_VERIFIED` for every new
+receipt; remove all legacy support; store only OCR hashes. Continuing creates
+misleading duplicates; removing legacy support would break old archives; hashes
+alone are not enough for reprocessing/debug.
+**Impact:** Legacy delete/copy/export can still see `OCR_VERIFIED`; DB-first
+export uses canonical OCR file records and does not expose OCR in Markdown by
+default.
+**Review trigger:** Revisit if future review UX starts explicitly verifying raw
+OCR text again.
+
 ### 2026-05-21 - Telegram as current review UI
 
 **Status:** active  
@@ -349,20 +391,6 @@ constraints, future web auth, and multi-user growth.
 path toward future analytics.
 
 ## Uncertain / pending decisions
-
-### 2026-05-22 - OCR_VERIFIED retention after Russian-only review
-
-**Status:** uncertain  
-**Question:** Should `OCR_VERIFIED` remain a permanent artifact when manual
-review is no longer performed on Armenian OCR?  
-**Context:** Current writer still creates `OCR_VERIFIED` as a copy of clean OCR,
-but the product rule says review happens on Russian note fields.  
-**Options:** Stop creating it by default; keep it for compatibility; store only
-OCR hash/text in SQLite; make retention configurable.  
-**Current leaning:** Stop creating permanent `OCR_VERIFIED` by default once
-documents and processing stages are DB-backed.  
-**Needed to decide:** Implement DB document storage and define which OCR stages
-are valuable for audit/reprocessing.
 
 ### 2026-05-22 - Scope of first PWA API
 

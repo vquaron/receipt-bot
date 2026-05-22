@@ -160,7 +160,7 @@ class ReceiptRepository:
     def export_user_receipts(self, user_id: int) -> Path:
         root_rel = user_root_rel(self.settings, user_id)
         root = safe_vault_path(self.vault, root_rel)
-        export_path = self.settings.data_dir / "exports" / str(user_id) / f"receipts_{datetime.now():%Y%m%d_%H%M%S}.zip"
+        export_path = self.settings.export_storage_dir / str(user_id) / f"receipts_{datetime.now():%Y%m%d_%H%M%S}.zip"
         materialize_root = self.settings.tmp_storage_dir / "exports" / uuid4().hex
         ensure_parent(export_path)
         try:

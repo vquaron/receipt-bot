@@ -37,6 +37,8 @@ class Settings:
     export_storage_dir: Path = Path("data/exports")
     debug_storage_dir: Path = Path("data/debug")
     storage_retention_tmp_hours: int = 24
+    storage_retention_export_days: int = 30
+    storage_retention_debug_days: int = 14
     storage_image_backend: str = "local"
     s3_bucket_name: str = ""
     s3_endpoint_url: str = ""
@@ -118,6 +120,8 @@ def load_settings() -> Settings:
         export_storage_dir=_path("EXPORT_STORAGE_DIR", env_file_values, data_dir / "exports"),
         debug_storage_dir=_path("DEBUG_STORAGE_DIR", env_file_values, data_dir / "debug"),
         storage_retention_tmp_hours=_int("STORAGE_RETENTION_TMP_HOURS", env_file_values, 24),
+        storage_retention_export_days=_int("STORAGE_RETENTION_EXPORT_DAYS", env_file_values, 30),
+        storage_retention_debug_days=_int("STORAGE_RETENTION_DEBUG_DAYS", env_file_values, 14),
         storage_image_backend=_get("STORAGE_IMAGE_BACKEND", env_file_values) or "local",
         s3_bucket_name=_get("S3_BUCKET_NAME", env_file_values) or "",
         s3_endpoint_url=_get("S3_ENDPOINT_URL", env_file_values) or "",

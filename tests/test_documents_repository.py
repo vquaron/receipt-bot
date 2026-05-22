@@ -285,6 +285,17 @@ def test_export_user_receipts_includes_legacy_and_db_canonical_files(tmp_path: P
     assert f"Canonical/{db_created.record.receipt_id}/source.hy.txt" in names
 
 
+def test_export_user_receipts_uses_configured_export_storage_dir(tmp_path: Path) -> None:
+    export_root = tmp_path / "custom-exports"
+    app_settings = _settings(tmp_path, export_storage_dir=export_root)
+    DocumentRepository(app_settings).create_confirmed_from_session(_session(app_settings, user_id=222), _parsed_receipt())
+
+    archive_path = ReceiptRepository(app_settings).export_user_receipts(222)
+
+    assert archive_path.is_relative_to(export_root)
+    assert not (app_settings.data_dir / "exports").exists()
+
+
 def test_export_user_receipts_includes_canonical_when_obsidian_export_missing(tmp_path: Path, monkeypatch) -> None:
     app_settings = _settings(tmp_path)
 

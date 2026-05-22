@@ -2,6 +2,50 @@
 
 ## 2026-05-22
 
+### Add storage hygiene and retention cleanup
+
+**Summary:** Added runtime cleanup for non-canonical storage artifacts and moved
+OpenAI debug output out of the Obsidian vault.
+**Files changed:**
+
+- `app/config.py`
+- `app/storage/retention.py`
+- `app/receipts/repository.py`
+- `app/obsidian/writer.py`
+- `app/telegram/bot.py`
+- `tests/test_storage_retention.py`
+- `tests/test_documents_repository.py`
+- `.env.example`
+- `README.md`
+- `docs/PROJECT_STATE.md`
+- `docs/DECISIONS.md`
+- `docs/NEXT_STEPS.md`
+- `docs/TASK_LOG.md`
+
+**Details:**
+
+- `/export_receipts` now writes ZIP files under `EXPORT_STORAGE_DIR`.
+- Invalid OpenAI JSON debug files now write under `DEBUG_STORAGE_DIR/openai/`
+  instead of `Users/.../DEBUG/openai` in the Obsidian vault.
+- Startup cleanup removes expired files from `EXPORT_STORAGE_DIR`,
+  `DEBUG_STORAGE_DIR`, `TMP_STORAGE_DIR/materialized`, `TMP_STORAGE_DIR/exports`,
+  and `TMP_STORAGE_DIR/telegram`.
+- Cleanup is path-safe, skips canonical document storage, and does not touch
+  `TMP_STORAGE_DIR/processing`, which remains owned by SQLite processing
+  session cleanup.
+- `OCR_VERIFIED` is now documented as legacy-only; new DB-first documents keep
+  canonical OCR in app storage and SQLite file records.
+
+**Reason:** After S3/B2 storage, export ZIPs, raw debug outputs, and
+materialized local S3 copies are non-canonical artifacts that should not grow
+without retention policy.
+**Validation:** `./.venv/bin/python -m pytest -q` passed with 97 tests.
+**Follow-ups:** PR8: storage health checks and optional dry-run-first
+repair/backfill tooling.
+**Related decisions:** `2026-05-22 - Runtime retention cleanup for
+non-canonical artifacts`; `2026-05-22 - OCR_VERIFIED is legacy-only`;
+`2026-05-22 - Generic storage refs for canonical images`.
+
 ### Add generic S3/B2 image storage
 
 **Summary:** Added generic local/S3 storage references for canonical receipt

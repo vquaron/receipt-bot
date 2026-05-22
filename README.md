@@ -107,6 +107,8 @@ TMP_STORAGE_DIR=data/tmp
 EXPORT_STORAGE_DIR=data/exports
 DEBUG_STORAGE_DIR=data/debug
 STORAGE_RETENTION_TMP_HOURS=24
+STORAGE_RETENTION_EXPORT_DAYS=30
+STORAGE_RETENTION_DEBUG_DAYS=14
 STORAGE_IMAGE_BACKEND=local
 S3_BUCKET_NAME=
 S3_ENDPOINT_URL=
@@ -186,6 +188,8 @@ PRIVILEGED_TELEGRAM_USER_IDS=
 data/app.db
 data/storage/documents/
 data/tmp/processing/
+data/exports/
+data/debug/
 data/corrections.json
 ```
 
@@ -231,7 +235,8 @@ data/storage/documents/<document_id>/clean.hy.txt
 data/storage/documents/<document_id>/source.hy.txt
 Users/<telegram_user_id>/Receipts/YYYY/MM/<file_name>.md
 Users/<telegram_user_id>/Attachments/receipts/YYYY/MM/<file_name>.jpg
-Users/<telegram_user_id>/DEBUG/openai/YYYY/MM/<temporary_name>.openai.raw.txt
+data/debug/openai/<telegram_user_id>/YYYY/MM/<temporary_name>.openai.raw.txt
+data/exports/<telegram_user_id>/receipts_YYYYMMDD_HHMMSS.zip
 ```
 
 При `STORAGE_IMAGE_BACKEND=s3` `original.jpg` и `stored.jpg` хранятся как
@@ -239,7 +244,12 @@ private S3/B2 objects, например
 `<S3_KEY_PREFIX>/documents/<document_id>/original.jpg`; `data/storage` остаётся
 local backend для OCR и dev/local image storage.
 
-`DEBUG/openai/...` появляется только если OpenAI вернул невалидный JSON.
+`data/debug/openai/...` появляется только если OpenAI вернул невалидный JSON.
+При старте бот безопасно чистит старые export ZIP, debug artifacts и временные
+materialized/cache-файлы из `data/tmp/materialized`, `data/tmp/exports` и
+`data/tmp/telegram`. Retention управляется настройками
+`STORAGE_RETENTION_EXPORT_DAYS`, `STORAGE_RETENTION_DEBUG_DAYS` и
+`STORAGE_RETENTION_TMP_HOURS`.
 
 Новые `MANIFEST/...` файлы не создаются. Старые manifest-файлы остаются
 поддержанным fallback для legacy-чеков.
@@ -341,7 +351,8 @@ OpenAI должен вернуть строгий JSON:
 
 В Markdown-заметке сначала выводится чек на русском, затем таблица товаров, затем английская версия и таблица товаров на английском. Исходный OCR не выводится в теле заметки; canonical OCR сохраняется в `data/storage/documents/<document_id>/` и записывается в SQLite `document_files`. Для новых DB-first документов Markdown attachment создаётся из `stored_image`, а canonical image может храниться локально или в private S3/B2 bucket.
 
-Если JSON невалиден, заметка не создаётся, а сырой ответ сохраняется в `DEBUG/openai/...`.
+Если JSON невалиден, заметка не создаётся, а сырой ответ сохраняется в
+`data/debug/openai/...`.
 
 ## 12. Удаление чека
 
