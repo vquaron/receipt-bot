@@ -2,6 +2,34 @@
 
 ## 2026-05-23
 
+### Add receipt magic deep links after save
+
+**Summary:** Changed the Telegram confirm response to link directly to the saved
+receipt in Web MVP.
+**Files changed:**
+
+- `app/telegram/handlers/receipt.py`
+- `app/web/app.py`
+- `app/web/static/app.js`
+- `tests/test_documents_repository.py`
+- `tests/test_web_app.py`
+- `docs/TASK_LOG.md`
+
+**Details:**
+
+- Successful finalize responses now say `Готово: чек сохранён.` and include
+  `Открыть на сайте:` when `WEB_BASE_URL` is configured.
+- Receipt links use one-time magic tokens with safe relative `next` redirects
+  to `/receipts/<document_id>`.
+- Web MVP serves authenticated receipt shell routes and opens the requested
+  receipt from the URL path.
+
+**Reason:** Users should open the saved receipt on the website instead of seeing
+an Obsidian Markdown filename as the primary completion message.
+**Validation:** `./.venv/bin/python -m pytest -q` passed with 130 tests;
+`git diff --check` clean.
+**Related decisions:** `2026-05-23 - First Web MVP is read-only and DB-only`.
+
 ### Add Web MVP with magic-link auth
 
 **Summary:** Added a separate FastAPI read-only Web MVP with Telegram magic-link

@@ -3,8 +3,9 @@ from __future__ import annotations
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from app.config import Settings, load_settings
@@ -72,6 +73,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return RedirectResponse("/login", status_code=302)
         return HTMLResponse(_static_text("index.html"))
 
+    @app.get("/receipts/{receipt_id}", response_class=HTMLResponse)
+    def receipt_shell(receipt_id: str, session: WebSessionProfile | None = Depends(optional_session)):
+        if session is None:
+            return RedirectResponse("/login", status_code=302)
+        return HTMLResponse(_static_text("index.html"))
+
     @app.get("/login", response_class=HTMLResponse)
     def login() -> HTMLResponse:
         return HTMLResponse(_static_text("login.html"))
@@ -93,7 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return Response(_static_text("styles.css"), media_type="text/css")
 
     @app.get("/auth/magic")
-    def auth_magic(token: str, request: Request):
+    def auth_magic(token: str, request: Request, next_path: str = Query("/", alias="next")):
         try:
             web_session = auth_repository.redeem_magic_token(
                 token,
@@ -105,7 +112,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not access_control.is_allowed(web_session.telegram_user_id):
             auth_repository.revoke_session(web_session.token)
             return HTMLResponse(_static_text("login_failed.html"), status_code=401)
-        response = RedirectResponse("/", status_code=302)
+        response = RedirectResponse(_safe_next_path(next_path), status_code=302)
         _set_session_cookie(response, app_settings, web_session)
         return response
 
@@ -247,3 +254,15 @@ def _clear_session_cookie(response: Response, settings: Settings) -> None:
 
 def _static_text(name: str) -> str:
     return (STATIC_DIR / name).read_text(encoding="utf-8")
+
+
+def _safe_next_path(value: str) -> str:
+    parsed = urlsplit(value or "/")
+    if parsed.scheme or parsed.netloc:
+        return "/"
+    path = parsed.path or "/"
+    if not path.startswith("/") or path.startswith("//"):
+        return "/"
+    query = f"?{parsed.query}" if parsed.query else ""
+    fragment = f"#{parsed.fragment}" if parsed.fragment else ""
+    return f"{path}{query}{fragment}"

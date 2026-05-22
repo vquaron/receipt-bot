@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
+from urllib.parse import quote, urlencode
 from uuid import uuid4
 
-from telegram import Update
+from telegram import LinkPreviewOptions, Update
 from telegram.ext import ContextTypes
 
 from app.llm.openai_parser import OpenAIInvalidJSONError, OpenAIQuotaError
@@ -48,6 +49,7 @@ from app.telegram.handlers.common import (
 )
 from app.storage.sessions import SessionStorageError, session_temp_dir
 from app.users.quotas import QuotaStorageError
+from app.web.auth import WebAuthRepository
 
 
 LOGGER = logging.getLogger(__name__)
@@ -366,27 +368,45 @@ async def create_note_from_review(session: ReceiptSession, reply_target, context
             "\n".join(
                 [
                     "Документ сохранён, но экспорт в Obsidian завершился ошибкой.",
+                    *_web_link_lines(session.user_id, record.document_id, context),
                     f"receipt_id: {record.receipt_id}",
                     f"merchant: {record.merchant}",
                     f"date: {record.date}",
                     f"amount: {record.amount or 'unknown_amount'}",
                     f"currency: {record.currency}",
                 ]
-            )
+            ),
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
         )
         return
     await reply_target.reply_text(
         "\n".join(
             [
-                f"Готово: создана заметка {record.receipt_id}.md",
+                "Готово: чек сохранён.",
+                *_web_link_lines(session.user_id, record.document_id, context),
                 f"receipt_id: {record.receipt_id}",
                 f"merchant: {record.merchant}",
                 f"date: {record.date}",
                 f"amount: {record.amount or 'unknown_amount'}",
                 f"currency: {record.currency}",
             ]
-        )
+        ),
+        link_preview_options=LinkPreviewOptions(is_disabled=True),
     )
+
+
+def _web_link_lines(user_id: int, document_id: str, context: ContextTypes.DEFAULT_TYPE) -> list[str]:
+    app_settings = settings(context)
+    if not app_settings.web_base_url:
+        return []
+    try:
+        link = WebAuthRepository(app_settings).create_magic_link(user_id)
+    except Exception:
+        LOGGER.exception("Failed to create web receipt link for user_id=%s document_id=%s", user_id, document_id)
+        return []
+    next_path = f"/receipts/{quote(document_id, safe='')}"
+    query = urlencode({"token": link.token, "next": next_path})
+    return [f"Открыть на сайте: {app_settings.web_base_url}/auth/magic?{query}"]
 
 
 def _quota_message(reason: str, daily_used: int, daily_limit: int, monthly_used: int, monthly_limit: int) -> str:

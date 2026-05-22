@@ -1,5 +1,6 @@
 let receipts = [];
 let selectedId = "";
+let initialReceiptId = receiptIdFromPath();
 
 const profileEl = document.querySelector("#profile");
 const listEl = document.querySelector("#receipt-list");
@@ -46,6 +47,9 @@ function renderList() {
 
 async function selectReceipt(id) {
   selectedId = id;
+  if (window.location.pathname !== `/receipts/${encodeURIComponent(id)}`) {
+    window.history.pushState({}, "", `/receipts/${encodeURIComponent(id)}`);
+  }
   renderList();
   detailEl.innerHTML = '<p class="empty">Loading...</p>';
   const data = await api(`/api/receipts/${encodeURIComponent(id)}`);
@@ -105,6 +109,15 @@ document.querySelector("#logout").addEventListener("click", async () => {
   window.location.href = "/login";
 });
 
+window.addEventListener("popstate", () => {
+  const id = receiptIdFromPath() || receipts[0]?.id || "";
+  if (id) {
+    selectReceipt(id).catch(() => {
+      detailEl.innerHTML = '<p class="empty">Receipt unavailable</p>';
+    });
+  }
+});
+
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});
 }
@@ -116,9 +129,18 @@ if ("serviceWorker" in navigator) {
   const data = await api("/api/receipts");
   if (!data) return;
   receipts = data.receipts || [];
-  selectedId = receipts[0]?.id || "";
+  selectedId = initialReceiptId || receipts[0]?.id || "";
   renderList();
   if (selectedId) {
-    await selectReceipt(selectedId);
+    try {
+      await selectReceipt(selectedId);
+    } catch {
+      detailEl.innerHTML = '<p class="empty">Receipt unavailable</p>';
+    }
   }
 })();
+
+function receiptIdFromPath() {
+  const match = window.location.pathname.match(/^\/receipts\/(.+)$/);
+  return match ? decodeURIComponent(match[1]) : "";
+}

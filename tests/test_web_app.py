@@ -43,6 +43,54 @@ def test_magic_login_sets_cookie_and_api_lists_db_documents_only(tmp_path: Path)
     assert receipts[0]["receipt_id"] == "receipt-one"
 
 
+def test_magic_login_redirects_to_safe_next_path(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    auth = WebAuthRepository(app_settings)
+    link = auth.create_magic_link(222)
+    client = TestClient(create_app(app_settings), base_url="https://receipts.example")
+
+    response = client.get(f"/auth/magic?token={link.token}&next=/receipts/doc-1", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/receipts/doc-1"
+
+
+def test_magic_login_rejects_unsafe_next_path(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    auth = WebAuthRepository(app_settings)
+    link = auth.create_magic_link(222)
+    protocol_relative_link = auth.create_magic_link(222)
+    client = TestClient(create_app(app_settings), base_url="https://receipts.example")
+
+    response = client.get(
+        f"/auth/magic?token={link.token}&next=https://evil.example/receipts/doc-1",
+        follow_redirects=False,
+    )
+    protocol_relative_response = client.get(
+        f"/auth/magic?token={protocol_relative_link.token}&next=//evil.example/receipts/doc-1",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/"
+    assert protocol_relative_response.status_code == 302
+    assert protocol_relative_response.headers["location"] == "/"
+
+
+def test_receipt_route_requires_auth_and_serves_shell(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    anonymous = TestClient(create_app(app_settings))
+    authenticated = _authenticated_client(app_settings, user_id=222)
+
+    anonymous_response = anonymous.get("/receipts/doc-1", follow_redirects=False)
+    authenticated_response = authenticated.get("/receipts/doc-1")
+
+    assert anonymous_response.status_code == 302
+    assert anonymous_response.headers["location"] == "/login"
+    assert authenticated_response.status_code == 200
+    assert "receipt-list" in authenticated_response.text
+
+
 def test_api_detail_returns_items_and_owner_scopes_documents(tmp_path: Path) -> None:
     app_settings = _settings(tmp_path)
     _insert_document(app_settings, user_id=222, document_id="doc-1", file_stem="receipt-one")

@@ -485,7 +485,7 @@ def test_export_receipt_note_ignores_non_list_possible_errors(tmp_path: Path) ->
 
 
 def test_telegram_finalize_persists_corrected_review_before_finishing_session(tmp_path: Path) -> None:
-    app_settings = _settings(tmp_path)
+    app_settings = _settings(tmp_path, web_base_url="https://app.finbot.uk")
     session_store = SessionStore(app_settings)
     repository = ReceiptRepository(app_settings)
     session = _session(app_settings, user_id=222)
@@ -506,14 +506,56 @@ def test_telegram_finalize_persists_corrected_review_before_finishing_session(tm
 
     asyncio.run(receipt_handler.create_note_from_review(session, reply_target, context))
 
-    assert any("receipt_id:" in message for message in reply_target.messages)
+    message = reply_target.messages[0]
+    assert "Готово: чек сохранён." in message
+    assert "Открыть на сайте: https://app.finbot.uk/auth/magic?token=" in message
+    assert "next=%2Freceipts%2F" in message
+    assert "создана заметка" not in message
+    assert ".md" not in message
+    assert "receipt_id:" in message
+    assert reply_target.replies[0][1]["link_preview_options"].is_disabled is True
     assert 222 not in receipt_handler.SESSIONS
     record = repository.list_user_receipts(222)[0]
     with connect_database(app_settings) as connection:
         document = connection.execute("select parsed_json from documents where id = ?", (record.document_id,)).fetchone()
         state = connection.execute("select state from processing_sessions where id = ?", (session.session_id,)).fetchone()
+        link = connection.execute("select telegram_user_id, token_hash, used_at from magic_links").fetchone()
     assert json.loads(document["parsed_json"])["merchant"] == "Corrected Merchant"
     assert state["state"] == SessionState.DONE.value
+    assert link["telegram_user_id"] == 222
+    assert link["used_at"] is None
+
+
+def test_telegram_finalize_without_web_base_url_omits_web_link(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    session_store = SessionStore(app_settings)
+    repository = ReceiptRepository(app_settings)
+    session = _session(app_settings, user_id=222)
+    session.parsed_receipt = _parsed_receipt()
+    session.state = SessionState.WAITING_FOR_RUSSIAN_REVIEW
+    session_store.save(session)
+    receipt_handler.SESSIONS[222] = session
+    context = SimpleNamespace(
+        application=SimpleNamespace(
+            bot_data={
+                "settings": app_settings,
+                "session_store": session_store,
+                "receipt_repository": repository,
+            }
+        )
+    )
+    reply_target = _ReplyTarget()
+
+    asyncio.run(receipt_handler.create_note_from_review(session, reply_target, context))
+
+    message = reply_target.messages[0]
+    assert "Готово: чек сохранён." in message
+    assert "Открыть на сайте:" not in message
+    assert "создана заметка" not in message
+    assert ".md" not in message
+    with connect_database(app_settings) as connection:
+        count = connection.execute("select count(*) from magic_links").fetchone()[0]
+    assert count == 0
 
 
 def test_confirmed_document_marks_export_failed_without_raising(tmp_path: Path, monkeypatch) -> None:
@@ -583,9 +625,11 @@ def test_telegram_finalize_reports_export_failure_but_marks_session_done(tmp_pat
 class _ReplyTarget:
     def __init__(self) -> None:
         self.messages: list[str] = []
+        self.replies: list[tuple[str, dict]] = []
 
-    async def reply_text(self, text: str) -> None:
+    async def reply_text(self, text: str, **kwargs) -> None:
         self.messages.append(text)
+        self.replies.append((text, kwargs))
 
 
 def _settings(tmp_path: Path, **overrides) -> Settings:
