@@ -107,6 +107,14 @@ TMP_STORAGE_DIR=data/tmp
 EXPORT_STORAGE_DIR=data/exports
 DEBUG_STORAGE_DIR=data/debug
 STORAGE_RETENTION_TMP_HOURS=24
+STORAGE_IMAGE_BACKEND=local
+S3_BUCKET_NAME=
+S3_ENDPOINT_URL=
+S3_ACCESS_KEY_ID=
+S3_SECRET_ACCESS_KEY=
+S3_KEY_PREFIX=receipt-bot
+STORAGE_STORED_IMAGE_MAX_EDGE_PX=2000
+STORAGE_STORED_IMAGE_JPEG_QUALITY=85
 USER_VAULT_ROOT=Users
 REGULAR_DAILY_RECEIPT_LIMIT=10
 REGULAR_MONTHLY_RECEIPT_LIMIT=100
@@ -122,6 +130,12 @@ WEBHOOK_SECRET_TOKEN=
 SQLite-хранилище создаётся при старте бота. Оно хранит пользователей, заявки,
 квоты, активные review-сессии и новые подтверждённые документы/items/files.
 Obsidian остаётся человекочитаемым экспортом, а не primary storage.
+
+`STORAGE_IMAGE_BACKEND=local` хранит canonical image-файлы в
+`APP_STORAGE_DIR`. Для production можно использовать S3-compatible backend
+(`STORAGE_IMAGE_BACKEND=s3`), например Backblaze B2 private bucket. В этом
+режиме в SQLite сохраняются bucket/key/checksum metadata, а публичные URL не
+становятся canonical reference.
 
 Секреты можно читать напрямую из env или через `*_FILE`:
 
@@ -206,17 +220,24 @@ PRIVILEGED_MONTHLY_RECEIPT_LIMIT=0
 ## 8. Структура Obsidian vault
 
 После успешной обработки нового чека бот создаёт DB-записи в `documents`,
-`document_items` и `document_files`, переносит canonical image/OCR в app storage
-и экспортирует Markdown с изображением в Obsidian:
+`document_items` и `document_files`, сохраняет canonical images через выбранный
+storage backend, оставляет OCR-файлы в local app storage и экспортирует
+Markdown с изображением в Obsidian:
 
 ```text
 data/storage/documents/<document_id>/original.jpg
+data/storage/documents/<document_id>/stored.jpg
 data/storage/documents/<document_id>/clean.hy.txt
 data/storage/documents/<document_id>/source.hy.txt
 Users/<telegram_user_id>/Receipts/YYYY/MM/<file_name>.md
 Users/<telegram_user_id>/Attachments/receipts/YYYY/MM/<file_name>.jpg
 Users/<telegram_user_id>/DEBUG/openai/YYYY/MM/<temporary_name>.openai.raw.txt
 ```
+
+При `STORAGE_IMAGE_BACKEND=s3` `original.jpg` и `stored.jpg` хранятся как
+private S3/B2 objects, например
+`<S3_KEY_PREFIX>/documents/<document_id>/original.jpg`; `data/storage` остаётся
+local backend для OCR и dev/local image storage.
 
 `DEBUG/openai/...` появляется только если OpenAI вернул невалидный JSON.
 

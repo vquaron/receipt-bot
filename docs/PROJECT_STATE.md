@@ -43,8 +43,9 @@ Current implementation status:
 - SQLite schema already includes planned tables for documents, items, files,
   processing sessions, usage events, correction rules, magic links, and web
   sessions.
-- Confirmed review creates DB rows first, stores canonical image/OCR files under
-  app storage, and generates Obsidian Markdown as an export artifact.
+- Confirmed review creates DB rows first, stores canonical images through the
+  configured storage backend, stores OCR files under local app storage, and
+  generates Obsidian Markdown as an export artifact.
 - Existing Markdown/manifest files remain operational artifacts and fallback
   data for old receipts, but new manifest JSON files are no longer created by
   the confirm flow.
@@ -66,7 +67,7 @@ Telegram photo
 -> OpenAI structured JSON
 -> Russian field review in Telegram
 -> user confirm / JSON correction / cancel
--> SQLite documents/items/files + canonical files in data/storage/documents/<document_id>/
+-> SQLite documents/items/files + canonical files through document_files storage refs
 -> Obsidian Markdown note + exported image
 ```
 
@@ -112,8 +113,9 @@ Configured storage:
 
 - `DATABASE_URL`, default `sqlite:///data/app.db`.
 - `DATA_DIR`, default `data`.
-- `APP_STORAGE_DIR`, `TMP_STORAGE_DIR`, `EXPORT_STORAGE_DIR`, `DEBUG_STORAGE_DIR`
-  are configured but not fully used by all pipelines yet.
+- `APP_STORAGE_DIR`, `TMP_STORAGE_DIR`, `EXPORT_STORAGE_DIR`, `DEBUG_STORAGE_DIR`,
+  and S3-compatible image storage settings are configured but not fully used by
+  all pipelines yet.
 - `OBSIDIAN_VAULT` points to the local/synced vault used for human-readable
   exports.
 
@@ -130,7 +132,12 @@ Current persistent files:
 - `Users/<telegram_user_id>/DEBUG/openai/...` only for invalid OpenAI JSON
 - `data/app.db` for users, access requests, `usage_events`,
   `processing_sessions`, `documents`, `document_items`, and `document_files`
-- `data/storage/documents/<document_id>/original.jpg`
+- `data/storage/documents/<document_id>/original.jpg` when the image backend is
+  local
+- `data/storage/documents/<document_id>/stored.jpg` when the image backend is
+  local
+- private S3/B2 objects for `original_image` and `stored_image` when
+  `STORAGE_IMAGE_BACKEND=s3`
 - `data/storage/documents/<document_id>/clean.hy.txt`
 - `data/storage/documents/<document_id>/source.hy.txt`
 - `data/tmp/processing/<session_id>/` for temporary image/OCR files during
@@ -142,8 +149,8 @@ Target storage direction:
 - Keep only value-bearing files permanently.
 - Temporary processing files now live under `data/tmp/processing/<session_id>/`
   and are moved into canonical app storage when review is confirmed.
-- Store canonical document data, items, files, sessions, quotas, and correction
-  rules in SQLite.
+- Store canonical document data, items, file metadata/storage references,
+  sessions, quotas, and correction rules in SQLite.
 - Obsidian exports should be generated from SQLite/parsed JSON, not used as the
   main data source.
 - Original receipt images must be preserved unless a later explicit decision
@@ -196,7 +203,13 @@ Current documents:
   accepted from the user.
 - `documents.possible_errors_json` stores review-visible possible OCR/parser
   errors.
-- Canonical image/OCR files live under `data/storage/documents/<document_id>/`.
+- Canonical images live through `document_files` storage references:
+  `storage_backend='local'` for dev/local storage or `storage_backend='s3'` for
+  production S3-compatible storage such as Backblaze B2.
+- Canonical OCR files still live under `data/storage/documents/<document_id>/`.
+- Each confirmed document stores `original_image` and `stored_image` file
+  records. `stored_image` is the optimized image used for Obsidian export and
+  receipt viewing when available.
 - Obsidian Markdown and its exported attachment are recorded as export files in
   `document_files`.
 - New manifest JSON files are not created; manifest parsing remains a fallback
@@ -243,6 +256,8 @@ Future web authorization:
 - SQLite migrations must be idempotent and atomic per migration.
 - Future DB changes must maintain `parser_version`, `schema_version`, and
   `prompt_version` for parsed documents.
+- Do not mount S3/B2 as a filesystem for canonical storage; use object storage
+  APIs and SQLite storage references.
 
 ## Current limitations
 
@@ -275,6 +290,7 @@ Current tests cover:
 - DB-first document/item/file creation and Obsidian export without new
   manifests;
 - DB-first delete/copy/export with legacy manifest fallback;
+- generic local/S3 image storage references for canonical images;
 - correction rules;
 - order document parsing/review behavior;
 - user-scoped receipt listing.

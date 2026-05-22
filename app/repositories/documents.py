@@ -23,19 +23,28 @@ from app.storage.normalization import (
     normalize_receipt_properties,
     slugify_merchant,
 )
+from app.storage.images import create_stored_image
+from app.storage.object_store import ObjectStorageError, StoredObject, image_storage, storage_key
 from app.storage.paths import ensure_parent, safe_vault_path
 from app.users.paths import user_dated_relpath
 
 
+DOCUMENT_STATUS_STORING_FILES = "storing_files"
 DOCUMENT_STATUS_CONFIRMED = "confirmed"
 DOCUMENT_STATUS_DELETED = "deleted"
 DOCUMENT_STATUS_EXPORT_FAILED = "export_failed"
+DOCUMENT_STATUS_STORAGE_FAILED = "storage_failed"
 
 FILE_KIND_ORIGINAL_IMAGE = "original_image"
+FILE_KIND_STORED_IMAGE = "stored_image"
 FILE_KIND_CLEAN_OCR = "clean_ocr"
 FILE_KIND_SOURCE_OCR = "source_ocr"
 FILE_KIND_OBSIDIAN_NOTE = "obsidian_note"
 FILE_KIND_OBSIDIAN_ATTACHMENT = "obsidian_attachment"
+
+STORAGE_BACKEND_LOCAL = "local"
+STORAGE_BACKEND_S3 = "s3"
+STORAGE_BACKEND_OBSIDIAN = "obsidian"
 
 PARSER_VERSION = "openai_parser_v1"
 PARSED_SCHEMA_VERSION = "receipt_schema_v1"
@@ -81,12 +90,10 @@ class DocumentRepository:
             amount=str(normalized.get("amount", "")),
         )
         document_root = self.settings.app_storage_dir / "documents" / document_id
-        canonical_targets = (
-            (session.image_path, document_root / "original.jpg", FILE_KIND_ORIGINAL_IMAGE),
-            (session.clean_ocr_path, document_root / "clean.hy.txt", FILE_KIND_CLEAN_OCR),
-            (session.source_ocr_path, document_root / "source.hy.txt", FILE_KIND_SOURCE_OCR),
-        )
-        moved: list[tuple[Path, Path]] = []
+        stored_image_path = session.image_path.parent / "stored.jpg"
+        uploaded_image_keys: list[str] = []
+        cleanup_local_paths: list[Path] = [stored_image_path]
+        image_store = None
         now = datetime.now()
 
         try:
@@ -97,32 +104,95 @@ class DocumentRepository:
                     document_id=document_id,
                     user_id=session.user_id,
                     document_type=document_type,
-                    status=DOCUMENT_STATUS_CONFIRMED,
+                    status=DOCUMENT_STATUS_STORING_FILES,
                     file_stem=file_stem,
                     parsed=normalized,
                     created_at=now,
                     reviewed_at=now,
                     ocr_text_hash=_sha256_text_file(session.source_ocr_path),
                 )
-                _insert_items(connection, document_id=document_id, parsed=normalized, created_at=now)
-                for source, target, kind in canonical_targets:
-                    ensure_parent(target)
-                    shutil.move(str(source), target)
-                    moved.append((source, target))
-                    _insert_file(
-                        connection,
-                        document_id=document_id,
-                        kind=kind,
-                        path=_relative_to(self.settings.app_storage_dir, target),
-                        absolute_path=target,
-                        created_at=now,
-                    )
         except Exception:
-            for source, target in reversed(moved):
-                if target.exists() and not source.exists():
-                    ensure_parent(source)
-                    shutil.move(str(target), source)
             raise
+
+        try:
+            image_store = image_storage(self.settings)
+            original_object = image_store.put_file(
+                session.image_path,
+                storage_key(self.settings, "documents", document_id, "original.jpg"),
+                content_type="image/jpeg",
+            )
+            uploaded_image_keys.append(original_object.key)
+            create_stored_image(session.image_path, stored_image_path, self.settings)
+            stored_object = image_store.put_file(
+                stored_image_path,
+                storage_key(self.settings, "documents", document_id, "stored.jpg"),
+                content_type="image/jpeg",
+            )
+            uploaded_image_keys.append(stored_object.key)
+
+            clean_target = document_root / "clean.hy.txt"
+            source_target = document_root / "source.hy.txt"
+            ensure_parent(clean_target)
+            shutil.copy2(session.clean_ocr_path, clean_target)
+            shutil.copy2(session.source_ocr_path, source_target)
+            cleanup_local_paths.extend([clean_target, source_target])
+            with connect_database(self.settings) as connection:
+                connection.execute("begin immediate")
+                _insert_items(connection, document_id=document_id, parsed=normalized, created_at=now)
+                _insert_stored_file(
+                    connection,
+                    document_id=document_id,
+                    kind=FILE_KIND_ORIGINAL_IMAGE,
+                    stored=original_object,
+                    is_canonical=True,
+                    created_at=now,
+                )
+                _insert_stored_file(
+                    connection,
+                    document_id=document_id,
+                    kind=FILE_KIND_STORED_IMAGE,
+                    stored=stored_object,
+                    is_canonical=True,
+                    created_at=now,
+                )
+                _insert_local_file(
+                    connection,
+                    document_id=document_id,
+                    kind=FILE_KIND_CLEAN_OCR,
+                    root=self.settings.app_storage_dir,
+                    absolute_path=clean_target,
+                    is_canonical=True,
+                    created_at=now,
+                )
+                _insert_local_file(
+                    connection,
+                    document_id=document_id,
+                    kind=FILE_KIND_SOURCE_OCR,
+                    root=self.settings.app_storage_dir,
+                    absolute_path=source_target,
+                    is_canonical=True,
+                    created_at=now,
+                )
+        except Exception as exc:
+            self.update_status(document_id, DOCUMENT_STATUS_STORAGE_FAILED)
+            for key in reversed(uploaded_image_keys):
+                try:
+                    if image_store is not None:
+                        image_store.delete_all_versions(key)
+                except Exception:
+                    pass
+            for path in reversed(cleanup_local_paths):
+                try:
+                    if path.exists():
+                        path.unlink()
+                except OSError:
+                    pass
+            try:
+                if document_root.exists():
+                    shutil.rmtree(document_root)
+            except OSError:
+                pass
+            raise DocumentStorageError("Failed to store canonical document files.") from exc
 
         artifact: ReceiptArtifact | None = None
         try:
@@ -132,14 +202,16 @@ class DocumentRepository:
                 file_stem=file_stem,
                 document_type=document_type,
                 parsed=normalized,
-                source_image_path=document_root / "original.jpg",
+                source_image_path=stored_image_path,
             )
-            self.add_file(document_id, FILE_KIND_OBSIDIAN_NOTE, artifact.note_path, storage_root="vault")
+            self.add_file(document_id, FILE_KIND_OBSIDIAN_NOTE, artifact.note_path, storage_root="vault", is_canonical=False)
             if artifact.attachment_path is not None:
-                self.add_file(document_id, FILE_KIND_OBSIDIAN_ATTACHMENT, artifact.attachment_path, storage_root="vault")
+                self.add_file(document_id, FILE_KIND_OBSIDIAN_ATTACHMENT, artifact.attachment_path, storage_root="vault", is_canonical=False)
         except Exception:
             self.update_status(document_id, DOCUMENT_STATUS_EXPORT_FAILED)
             artifact = None
+        else:
+            self.update_status(document_id, DOCUMENT_STATUS_CONFIRMED)
 
         record = self.get_user_document(session.user_id, file_stem)
         if record is None:
@@ -171,15 +243,18 @@ class DocumentRepository:
                 (DOCUMENT_STATUS_DELETED, now, now, document_id),
             )
 
-    def add_file(self, document_id: str, kind: str, path: Path, *, storage_root: str) -> None:
+    def add_file(self, document_id: str, kind: str, path: Path, *, storage_root: str, is_canonical: bool = False) -> None:
         root = self.settings.app_storage_dir if storage_root == "app" else self.settings.obsidian_vault
+        backend = STORAGE_BACKEND_LOCAL if storage_root == "app" else STORAGE_BACKEND_OBSIDIAN
         with connect_database(self.settings) as connection:
-            _insert_file(
+            _insert_local_file(
                 connection,
                 document_id=document_id,
                 kind=kind,
-                path=_relative_to(root, path),
+                root=root,
                 absolute_path=path,
+                storage_backend=backend,
+                is_canonical=is_canonical,
                 created_at=datetime.now(),
             )
 
@@ -191,9 +266,10 @@ class DocumentRepository:
                 from documents
                 where owner_telegram_user_id = ?
                   and deleted_at is null
+                  and status in (?, ?)
                 order by coalesce(date, '') desc, created_at desc, id desc
                 """,
-                (user_id,),
+                (user_id, DOCUMENT_STATUS_CONFIRMED, DOCUMENT_STATUS_EXPORT_FAILED),
             ).fetchall()
             files_by_document = _files_by_document(connection, [str(row["id"]) for row in rows])
         return [_record_from_document_row(row, files_by_document.get(str(row["id"]), ())) for row in rows]
@@ -210,11 +286,12 @@ class DocumentRepository:
                 from documents
                 where owner_telegram_user_id = ?
                   and deleted_at is null
+                  and status in (?, ?)
                   and (id = ? or file_stem = ? or file_stem = ?)
                 order by created_at desc
                 limit 1
                 """,
-                (user_id, cleaned, cleaned, cleaned_stem),
+                (user_id, DOCUMENT_STATUS_CONFIRMED, DOCUMENT_STATUS_EXPORT_FAILED, cleaned, cleaned, cleaned_stem),
             ).fetchone()
             if row is None:
                 return None
@@ -233,9 +310,10 @@ class DocumentRepository:
                 from documents
                 where id = ?
                   and deleted_at is null
+                  and status in (?, ?)
                 limit 1
                 """,
-                (cleaned,),
+                (cleaned, DOCUMENT_STATUS_CONFIRMED, DOCUMENT_STATUS_EXPORT_FAILED),
             ).fetchone()
             if exact is not None:
                 files = _files_by_document(connection, [str(exact["id"])]).get(str(exact["id"]), ())
@@ -246,10 +324,11 @@ class DocumentRepository:
                 select *
                 from documents
                 where deleted_at is null
+                  and status in (?, ?)
                   and (file_stem = ? or file_stem = ?)
                 order by created_at desc
                 """,
-                (cleaned, cleaned_stem),
+                (DOCUMENT_STATUS_CONFIRMED, DOCUMENT_STATUS_EXPORT_FAILED, cleaned, cleaned_stem),
             ).fetchall()
             if len(rows) > 1:
                 raise DocumentAmbiguousError("Several DB documents share this receipt_id. Use the full document id.")
@@ -263,6 +342,7 @@ class DocumentRepository:
         if not record.document_id:
             raise DocumentStorageError("Document id is required for DB delete.")
         targets = self._validated_file_targets(record.file_records)
+        remote_records = [file for file in record.file_records if file.storage_backend == STORAGE_BACKEND_S3]
         deleted: list[Path] = []
         missing: list[Path] = []
         for path in targets:
@@ -271,6 +351,15 @@ class DocumentRepository:
                 deleted.append(path)
             else:
                 missing.append(path)
+        if remote_records:
+            store = image_storage(self.settings)
+            for file in remote_records:
+                _validate_object_key(file.storage_key)
+                try:
+                    store.delete_all_versions(file.storage_key)
+                except ObjectStorageError as exc:
+                    raise DocumentStorageError(str(exc)) from exc
+                deleted.append(Path(file.storage_key))
         self.mark_deleted(record.document_id)
         return DocumentDeleteResult(record=record, deleted=deleted, missing=missing)
 
@@ -308,12 +397,31 @@ class DocumentRepository:
             note_date=note_date,
         )
         document_root = self.settings.app_storage_dir / "documents" / new_document_id
-        canonical_files = [file for file in files if file.storage == "app"]
+        canonical_files = [file for file in files if file.is_canonical]
         copied: list[tuple[ReceiptFileRecord, Path]] = []
+        copied_remote: list[str] = []
         now = datetime.now()
 
         try:
+            image_store = image_storage(self.settings)
+            copied_storage_objects: list[tuple[ReceiptFileRecord, StoredObject]] = []
             for file in canonical_files:
+                if file.storage_backend == STORAGE_BACKEND_S3:
+                    target_key = storage_key(self.settings, "documents", new_document_id, file.path.name)
+                    stored = image_store.copy(file.storage_key, target_key, content_type=file.mime_type)
+                    if not stored.sha256:
+                        stored = StoredObject(
+                            backend=stored.backend,
+                            key=stored.key,
+                            bucket=stored.bucket,
+                            mime_type=stored.mime_type,
+                            size_bytes=stored.size_bytes,
+                            sha256=file.sha256,
+                            etag=stored.etag,
+                        )
+                    copied_storage_objects.append((file, stored))
+                    copied_remote.append(stored.key)
+                    continue
                 source_path = self.file_path(file)
                 if not source_path.exists() or not source_path.is_file():
                     raise DocumentStorageError(f"Source canonical file is missing: {file.path.as_posix()}")
@@ -345,23 +453,41 @@ class DocumentRepository:
                     item_rows=item_rows,
                     created_at=now,
                 )
-                for file, target_path in copied:
-                    _insert_file(
+                for file, stored in copied_storage_objects:
+                    _insert_stored_file(
                         connection,
                         document_id=new_document_id,
                         kind=file.kind,
-                        path=_relative_to(self.settings.app_storage_dir, target_path),
+                        stored=stored,
+                        is_canonical=True,
+                        created_at=now,
+                    )
+                for file, target_path in copied:
+                    _insert_local_file(
+                        connection,
+                        document_id=new_document_id,
+                        kind=file.kind,
                         absolute_path=target_path,
+                        root=self.settings.app_storage_dir,
+                        storage_backend=STORAGE_BACKEND_LOCAL,
+                        is_canonical=True,
                         created_at=now,
                     )
         except Exception:
             for _file, target in reversed(copied):
                 if target.exists():
                     target.unlink()
+            try:
+                image_store = image_storage(self.settings)
+                for key in reversed(copied_remote):
+                    image_store.delete_all_versions(key)
+            except Exception:
+                pass
             raise
 
         artifact: ReceiptArtifact | None = None
-        original = self._first_existing_canonical(new_document_id, FILE_KIND_ORIGINAL_IMAGE)
+        stored_image = self._first_existing_canonical(new_document_id, FILE_KIND_STORED_IMAGE)
+        original = stored_image or self._first_existing_canonical(new_document_id, FILE_KIND_ORIGINAL_IMAGE)
         if original is not None:
             try:
                 artifact = export_receipt_note(
@@ -372,9 +498,9 @@ class DocumentRepository:
                     parsed=parsed,
                     source_image_path=original,
                 )
-                self.add_file(new_document_id, FILE_KIND_OBSIDIAN_NOTE, artifact.note_path, storage_root="vault")
+                self.add_file(new_document_id, FILE_KIND_OBSIDIAN_NOTE, artifact.note_path, storage_root="vault", is_canonical=False)
                 if artifact.attachment_path is not None:
-                    self.add_file(new_document_id, FILE_KIND_OBSIDIAN_ATTACHMENT, artifact.attachment_path, storage_root="vault")
+                    self.add_file(new_document_id, FILE_KIND_OBSIDIAN_ATTACHMENT, artifact.attachment_path, storage_root="vault", is_canonical=False)
             except Exception:
                 self.update_status(new_document_id, DOCUMENT_STATUS_EXPORT_FAILED)
                 artifact = None
@@ -384,13 +510,18 @@ class DocumentRepository:
             raise DocumentStorageError("Copied document could not be read back.")
         return DocumentCreateResult(record=record, artifact=artifact)
 
-    def archive_files_for_user(self, user_id: int) -> list[DocumentArchiveFile]:
+    def archive_files_for_user(self, user_id: int, *, materialize_root: Path | None = None) -> list[DocumentArchiveFile]:
         result: list[DocumentArchiveFile] = []
         for record in self.list_user_documents(user_id):
             for file in record.file_records:
-                if file.storage != "app":
+                if not file.is_canonical:
                     continue
-                path = self.file_path(file)
+                if file.storage_backend == STORAGE_BACKEND_S3:
+                    if materialize_root is None:
+                        raise DocumentStorageError("materialize_root is required for S3 archive files.")
+                    path = self.materialize_file(file, materialize_root / record.receipt_id)
+                else:
+                    path = self.file_path(file)
                 if not path.exists():
                     continue
                 if not path.is_file():
@@ -404,14 +535,33 @@ class DocumentRepository:
         return result
 
     def file_path(self, file_record: ReceiptFileRecord) -> Path:
-        root = self.settings.app_storage_dir if file_record.storage == "app" else self.settings.obsidian_vault
-        if file_record.storage == "vault":
+        if file_record.storage_backend == STORAGE_BACKEND_S3:
+            raise ValueError("S3-backed files must be materialized before use.")
+        root = self.settings.obsidian_vault if file_record.storage_backend == STORAGE_BACKEND_OBSIDIAN else self.settings.app_storage_dir
+        if file_record.storage_backend == STORAGE_BACKEND_OBSIDIAN:
             return safe_vault_path(root, file_record.path)
         return _safe_storage_path(root, file_record.path)
+
+    def materialize_file(self, file_record: ReceiptFileRecord, target_dir: Path) -> Path:
+        if file_record.storage_backend != STORAGE_BACKEND_S3:
+            return self.file_path(file_record)
+        _validate_object_key(file_record.storage_key)
+        target = target_dir / file_record.path.name
+        image_storage(self.settings).download_to(file_record.storage_key, target)
+        if file_record.sha256 and _sha256_file(target) != file_record.sha256:
+            try:
+                target.unlink()
+            except OSError:
+                pass
+            raise DocumentStorageError("Downloaded object checksum does not match document_files metadata.")
+        return target
 
     def _validated_file_targets(self, files: tuple[ReceiptFileRecord, ...]) -> list[Path]:
         targets: list[Path] = []
         for file in files:
+            if file.storage_backend == STORAGE_BACKEND_S3:
+                _validate_object_key(file.storage_key)
+                continue
             try:
                 target = self.file_path(file)
             except ValueError as exc:
@@ -430,9 +580,15 @@ class DocumentRepository:
         for file in record.file_records:
             if file.kind != kind:
                 continue
-            path = self.file_path(file)
-            if path.exists() and path.is_file():
-                return path
+            if file.storage_backend == STORAGE_BACKEND_S3:
+                try:
+                    return self.materialize_file(file, self.settings.tmp_storage_dir / "materialized" / document_id)
+                except DocumentStorageError:
+                    return None
+            else:
+                path = self.file_path(file)
+                if path.exists() and path.is_file():
+                    return path
         return None
 
     def _next_file_stem(self, *, user_id: int, note_date: date, merchant: str, amount: str) -> str:
@@ -636,15 +792,62 @@ def _copy_item_rows(
         )
 
 
-def _insert_file(
+def _insert_stored_file(
     connection: sqlite3.Connection,
     *,
     document_id: str,
     kind: str,
-    path: Path,
-    absolute_path: Path,
+    stored: StoredObject,
+    is_canonical: bool,
     created_at: datetime,
 ) -> None:
+    connection.execute(
+        """
+        insert into document_files(
+            document_id,
+            kind,
+            path,
+            storage_backend,
+            storage_key,
+            bucket,
+            is_canonical,
+            etag,
+            mime_type,
+            size_bytes,
+            sha256,
+            created_at
+        )
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            document_id,
+            kind,
+            stored.key,
+            stored.backend,
+            stored.key,
+            stored.bucket,
+            1 if is_canonical else 0,
+            stored.etag,
+            stored.mime_type,
+            stored.size_bytes,
+            stored.sha256,
+            created_at.isoformat(),
+        ),
+    )
+
+
+def _insert_local_file(
+    connection: sqlite3.Connection,
+    *,
+    document_id: str,
+    kind: str,
+    root: Path,
+    absolute_path: Path,
+    created_at: datetime,
+    storage_backend: str = STORAGE_BACKEND_LOCAL,
+    is_canonical: bool,
+) -> None:
+    relative_path = _relative_to(root, absolute_path)
     stat = absolute_path.stat()
     mime_type = mimetypes.guess_type(absolute_path.name)[0] or "application/octet-stream"
     connection.execute(
@@ -653,17 +856,25 @@ def _insert_file(
             document_id,
             kind,
             path,
+            storage_backend,
+            storage_key,
+            bucket,
+            is_canonical,
+            etag,
             mime_type,
             size_bytes,
             sha256,
             created_at
         )
-        values (?, ?, ?, ?, ?, ?, ?)
+        values (?, ?, ?, ?, ?, '', ?, '', ?, ?, ?, ?)
         """,
         (
             document_id,
             kind,
-            path.as_posix(),
+            relative_path.as_posix(),
+            storage_backend,
+            relative_path.as_posix(),
+            1 if is_canonical else 0,
             mime_type,
             stat.st_size,
             _sha256_file(absolute_path),
@@ -681,7 +892,18 @@ def _files_by_document(
     placeholders = ", ".join("?" for _ in document_ids)
     rows = connection.execute(
         f"""
-        select document_id, kind, path, mime_type, size_bytes, sha256
+        select
+            document_id,
+            kind,
+            path,
+            storage_backend,
+            storage_key,
+            bucket,
+            is_canonical,
+            etag,
+            mime_type,
+            size_bytes,
+            sha256
         from document_files
         where document_id in ({placeholders})
         order by id
@@ -690,14 +912,23 @@ def _files_by_document(
     ).fetchall()
     result: dict[str, list[ReceiptFileRecord]] = {}
     for row in rows:
+        backend = str(row["storage_backend"] or "")
+        if not backend:
+            backend = _storage_backend_for_kind(str(row["kind"]))
+        storage_key_value = str(row["storage_key"] or row["path"])
         result.setdefault(str(row["document_id"]), []).append(
             ReceiptFileRecord(
                 kind=str(row["kind"]),
                 path=Path(str(row["path"])),
-                storage=_storage_for_kind(str(row["kind"])),
+                storage=_legacy_storage_alias(backend),
+                storage_backend=backend,
+                storage_key=storage_key_value,
+                bucket=str(row["bucket"] or ""),
+                is_canonical=bool(row["is_canonical"]),
                 mime_type=str(row["mime_type"] or ""),
                 size_bytes=int(row["size_bytes"] or 0),
                 sha256=str(row["sha256"] or ""),
+                etag=str(row["etag"] or ""),
             )
         )
     return {key: tuple(value) for key, value in result.items()}
@@ -715,7 +946,7 @@ def _record_from_document_row(row: sqlite3.Row, files: tuple[ReceiptFileRecord, 
         amount=str(row["amount"] or ""),
         currency=str(row["currency"] or "AMD"),
         created_at=str(row["created_at"] or ""),
-        files=tuple(file.path for file in files if file.storage == "vault"),
+        files=tuple(file.path for file in files if file.storage_backend == STORAGE_BACKEND_OBSIDIAN),
         document_type=normalize_document_type(row["document_type"]),
         document_id=str(row["id"]),
         source="db",
@@ -768,10 +999,24 @@ def _safe_storage_path(root: Path, rel_path: Path) -> Path:
     return candidate
 
 
-def _storage_for_kind(kind: str) -> str:
-    if kind in {FILE_KIND_ORIGINAL_IMAGE, FILE_KIND_CLEAN_OCR, FILE_KIND_SOURCE_OCR}:
-        return "app"
-    return "vault"
+def _storage_backend_for_kind(kind: str) -> str:
+    if kind in {FILE_KIND_ORIGINAL_IMAGE, FILE_KIND_STORED_IMAGE, FILE_KIND_CLEAN_OCR, FILE_KIND_SOURCE_OCR}:
+        return STORAGE_BACKEND_LOCAL
+    return STORAGE_BACKEND_OBSIDIAN
+
+
+def _legacy_storage_alias(storage_backend: str) -> str:
+    if storage_backend == STORAGE_BACKEND_OBSIDIAN:
+        return "vault"
+    if storage_backend == STORAGE_BACKEND_S3:
+        return "s3"
+    return "app"
+
+
+def _validate_object_key(key: str) -> None:
+    path = Path(key)
+    if not key or path.is_absolute() or ".." in path.parts:
+        raise DocumentStorageError("Refusing to use unsafe object storage key.")
 
 
 def _dedupe_paths(paths: list[Path]) -> list[Path]:

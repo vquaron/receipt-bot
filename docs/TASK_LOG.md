@@ -2,6 +2,53 @@
 
 ## 2026-05-22
 
+### Add generic S3/B2 image storage
+
+**Summary:** Added generic local/S3 storage references for canonical receipt
+images and introduced `stored_image` alongside `original_image`.
+**Files changed:**
+
+- `app/config.py`
+- `app/db/schema.py`
+- `app/db/migrations.py`
+- `app/repositories/documents.py`
+- `app/storage/object_store.py`
+- `app/storage/images.py`
+- `app/receipts/models.py`
+- `app/receipts/repository.py`
+- `app/telegram/handlers/receipt.py`
+- `app/telegram/handlers/receipts.py`
+- `tests/test_db_foundation.py`
+- `tests/test_documents_repository.py`
+- `.env.example`
+- `README.md`
+- `docs/PROJECT_STATE.md`
+- `docs/DECISIONS.md`
+- `docs/NEXT_STEPS.md`
+- `docs/TASK_LOG.md`
+
+**Details:**
+
+- Added `storage_backend`, `storage_key`, `bucket`, `is_canonical`, and `etag`
+  metadata to `document_files`.
+- Added local and S3-compatible object storage abstraction for canonical images.
+- New confirm flows create `documents.status='storing_files'`, store
+  `original_image` and optimized `stored_image`, then mark the document
+  `confirmed`.
+- `stored_image` is preferred for Obsidian export and `/receipt` display.
+- DB copy/export/delete can operate on S3-backed canonical images.
+- Storage failures mark the document `storage_failed` and keep the review
+  session active for retry.
+
+**Reason:** Receipt images are large immutable binaries and fit private
+S3-compatible storage, while SQLite should remain the source of truth for
+ownership and file metadata.
+**Validation:** `./.venv/bin/python -m pytest -q` passed.
+**Follow-ups:** PR7: exports/debug cleanup and local cache retention.
+**Related decisions:** `2026-05-21 - SQLite as source of truth`;
+`2026-05-21 - Obsidian as export / representation`;
+`2026-05-22 - Generic storage refs for canonical images`.
+
 ### Make delete, grant, and export DB-first
 
 **Summary:** Moved receipt deletion, admin grant/copy, and user ZIP export to

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
+import shutil
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -10,6 +12,8 @@ from app.repositories.documents import (
     FILE_KIND_OBSIDIAN_NOTE,
     FILE_KIND_ORIGINAL_IMAGE,
     FILE_KIND_OBSIDIAN_ATTACHMENT,
+    FILE_KIND_STORED_IMAGE,
+    DocumentStorageError,
 )
 from app.receipts.document_types import document_type_label
 from app.receipts.repository import ReceiptCopyError, ReceiptNotFoundError
@@ -57,7 +61,7 @@ async def receipt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     try:
         note_path, image_path = _record_paths(record, context, update.effective_user.id)
-    except ValueError:
+    except (ValueError, DocumentStorageError):
         LOGGER.warning(
             "Invalid receipt paths for user_id=%s receipt_id=%s query=%r",
             update.effective_user.id,
@@ -80,7 +84,10 @@ async def receipt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
     await update.message.reply_text(summary)
     if image_path:
-        await update.message.reply_photo(photo=image_path)
+        try:
+            await update.message.reply_photo(photo=image_path)
+        finally:
+            _cleanup_materialized_tmp_file(image_path, settings(context).tmp_storage_dir)
     if note_path and note_path.exists():
         await update.message.reply_document(document=note_path)
 
@@ -93,7 +100,7 @@ async def export_receipts_command(update: Update, context: ContextTypes.DEFAULT_
     await update.message.reply_text("Собираю архив ваших чеков...")
     try:
         archive_path = await asyncio.to_thread(receipts(context).export_user_receipts, update.effective_user.id)
-    except OSError:
+    except (OSError, DocumentStorageError):
         LOGGER.exception("Failed to export receipts for user_id=%s", update.effective_user.id)
         await update.message.reply_text("Не удалось создать архив чеков.")
         return
@@ -156,9 +163,20 @@ def _first_existing_file(vault, rel_paths, *, prefixes: tuple[str, ...], suffixe
 
 def _record_paths(record, context: ContextTypes.DEFAULT_TYPE, user_id: int):
     if record.source == "db":
-        image_file = _first_record_file(record, FILE_KIND_ORIGINAL_IMAGE) or _first_record_file(record, FILE_KIND_OBSIDIAN_ATTACHMENT)
+        image_file = (
+            _first_record_file(record, FILE_KIND_STORED_IMAGE)
+            or _first_record_file(record, FILE_KIND_ORIGINAL_IMAGE)
+            or _first_record_file(record, FILE_KIND_OBSIDIAN_ATTACHMENT)
+        )
         note_file = _first_record_file(record, FILE_KIND_OBSIDIAN_NOTE)
-        image_path = receipts(context).file_path(image_file) if image_file is not None else None
+        image_path = (
+            receipts(context).materialize_file(
+                image_file,
+                settings(context).tmp_storage_dir / "telegram" / str(record.owner_user_id) / record.receipt_id,
+            )
+            if image_file is not None
+            else None
+        )
         note_path = receipts(context).file_path(note_file) if note_file is not None else None
         return note_path, image_path
 
@@ -185,3 +203,24 @@ def _record_paths(record, context: ContextTypes.DEFAULT_TYPE, user_id: int):
 
 def _first_record_file(record, kind: str):
     return next((file for file in record.file_records if file.kind == kind), None)
+
+
+def _cleanup_materialized_tmp_file(path: Path, tmp_root: Path) -> None:
+    try:
+        resolved_path = path.resolve()
+        resolved_root = tmp_root.resolve()
+    except OSError:
+        return
+    if not resolved_path.is_relative_to(resolved_root):
+        return
+    try:
+        resolved_path.unlink(missing_ok=True)
+    except OSError:
+        return
+    parent = resolved_path.parent
+    while parent != resolved_root:
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+        parent = parent.parent

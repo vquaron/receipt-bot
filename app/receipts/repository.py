@@ -6,6 +6,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 from app.config import Settings
 from app.obsidian.delete import ReceiptDeleteError as LegacyReceiptDeleteError
@@ -60,6 +61,9 @@ class ReceiptRepository:
 
     def file_path(self, file_record: ReceiptFileRecord) -> Path:
         return self.documents.file_path(file_record)
+
+    def materialize_file(self, file_record: ReceiptFileRecord, target_dir: Path) -> Path:
+        return self.documents.materialize_file(file_record, target_dir)
 
     def delete_receipt(
         self,
@@ -157,14 +161,18 @@ class ReceiptRepository:
         root_rel = user_root_rel(self.settings, user_id)
         root = safe_vault_path(self.vault, root_rel)
         export_path = self.settings.data_dir / "exports" / str(user_id) / f"receipts_{datetime.now():%Y%m%d_%H%M%S}.zip"
+        materialize_root = self.settings.tmp_storage_dir / "exports" / uuid4().hex
         ensure_parent(export_path)
-        with zipfile.ZipFile(export_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            if root.exists():
-                for path in sorted(root.glob("**/*")):
-                    if path.is_file():
-                        archive.write(path, path.relative_to(root).as_posix())
-            for archive_file in self.documents.archive_files_for_user(user_id):
-                archive.write(archive_file.path, archive_file.archive_name)
+        try:
+            with zipfile.ZipFile(export_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                if root.exists():
+                    for path in sorted(root.glob("**/*")):
+                        if path.is_file():
+                            archive.write(path, path.relative_to(root).as_posix())
+                for archive_file in self.documents.archive_files_for_user(user_id, materialize_root=materialize_root):
+                    archive.write(archive_file.path, archive_file.archive_name)
+        finally:
+            shutil.rmtree(materialize_root, ignore_errors=True)
         return export_path
 
     def _list_all_receipts(self) -> list[ReceiptRecord]:

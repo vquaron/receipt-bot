@@ -9,9 +9,14 @@ class ReceiptFileRecord:
     kind: str
     path: Path
     storage: str = "vault"
+    storage_backend: str = ""
+    storage_key: str = ""
+    bucket: str = ""
+    is_canonical: bool = False
     mime_type: str = ""
     size_bytes: int = 0
     sha256: str = ""
+    etag: str = ""
 
 
 @dataclass(frozen=True, slots=True)
