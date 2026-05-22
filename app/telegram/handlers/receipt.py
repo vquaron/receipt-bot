@@ -272,7 +272,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await update.message.reply_text(f"Не удалось принять исправления: {exc}")
             return
         corrected = merge_review_payload(session.parsed_receipt, payload)
-        learned_count = corrections(context).learn(session.parsed_receipt, corrected)
+        learned_count = corrections(context).learn(
+            session.parsed_receipt,
+            corrected,
+            created_by_telegram_user_id=session.user_id,
+        )
         session.parsed_receipt = corrected
         try:
             save_session(session, context)

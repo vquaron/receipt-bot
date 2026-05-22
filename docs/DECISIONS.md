@@ -262,9 +262,10 @@ string replacement can corrupt unrelated fields.
 **Alternatives considered:** Put all corrections into OpenAI prompts; perform
 global string replacement; do not learn corrections. These approaches are less
 safe and less debuggable.  
-**Impact:** Current rules live in `data/corrections.json`, but the schema already
-contains `correction_rules` with scoped uniqueness. A future PR should migrate
-runtime correction storage to SQLite.  
+**Impact:** Runtime rules live in SQLite `correction_rules` with scoped
+uniqueness. Legacy `data/corrections.json` is only a one-time import source when
+the SQLite table is empty. Applying a rule updates usage counters; learning a
+rule writes the Telegram user id when available.
 **Review trigger:** Revisit when correction rules need merchant-specific,
 language-specific, or user-specific behavior.
 
