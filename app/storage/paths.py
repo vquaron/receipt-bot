@@ -18,6 +18,9 @@ def yaml_string(value: str) -> str:
 
 
 def safe_vault_path(vault: Path, rel_path: str | Path) -> Path:
+    rel_path = Path(rel_path)
+    if rel_path.is_absolute() or ".." in rel_path.parts:
+        raise ValueError("Path escapes Obsidian vault.")
     vault = vault.expanduser().resolve()
     candidate = (vault / rel_path).resolve()
     if not candidate.is_relative_to(vault):

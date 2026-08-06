@@ -50,6 +50,7 @@ def test_migrations_are_idempotent(tmp_path: Path) -> None:
         (1, "initial_storage_schema"),
         (2, "access_requests_unique_pending_user"),
         (3, "document_file_storage_refs"),
+        (4, "owner_scoped_correction_rules"),
     ]
 
 
@@ -137,6 +138,73 @@ def test_correction_rules_unique_scope_uses_empty_strings(tmp_path: Path) -> Non
                 """,
                 ("unit", "WT", "шт", "", "", "", "now", "now"),
             )
+
+        connection.execute(
+            """
+            insert into correction_rules(owner_telegram_user_id, scope, source, target, language, document_type, merchant, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (222, "unit", "WT", "шт", "", "", "", "now", "now"),
+        )
+
+
+def test_correction_rules_owner_scope_migration_preserves_ownerless_rows(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    app_settings.data_dir.mkdir(parents=True)
+    db_path = app_settings.data_dir / "app.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(
+            """
+            create table schema_migrations (
+                version integer primary key,
+                name text not null,
+                applied_at text not null
+            );
+            insert into schema_migrations(version, name, applied_at)
+            values (1, 'initial_storage_schema', 'now'),
+                   (2, 'access_requests_unique_pending_user', 'now'),
+                   (3, 'document_file_storage_refs', 'now');
+            create table correction_rules (
+                id integer primary key,
+                scope text not null,
+                source text not null,
+                target text not null,
+                language text not null default '',
+                document_type text not null default '',
+                merchant text not null default '',
+                usage_count integer not null default 0,
+                last_used_at text,
+                created_at text not null,
+                updated_at text not null,
+                created_by_telegram_user_id integer
+            );
+            create unique index idx_correction_rules_unique
+            on correction_rules(scope, source, language, document_type, merchant);
+            create index idx_correction_rules_lookup
+            on correction_rules(scope, source, language, document_type, merchant);
+            insert into correction_rules(scope, source, target, language, document_type, merchant, created_at, updated_at)
+            values ('merchant', 'Զովք', 'Legacy', '', '', '', 'now', 'now');
+            """
+        )
+
+    with connect_database(app_settings) as connection:
+        migrations.apply_migrations(connection)
+        row = connection.execute(
+            """
+            select owner_telegram_user_id, source, target
+            from correction_rules
+            where scope = 'merchant'
+            """
+        ).fetchone()
+        assert int(row["owner_telegram_user_id"]) == 0
+        assert row["target"] == "Legacy"
+        connection.execute(
+            """
+            insert into correction_rules(owner_telegram_user_id, scope, source, target, language, document_type, merchant, created_at, updated_at)
+            values (?, ?, ?, ?, '', '', '', ?, ?)
+            """,
+            (222, "merchant", "Զովք", "User scoped", "now", "now"),
+        )
 
 
 def test_database_url_paths_are_project_relative() -> None:

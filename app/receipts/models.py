@@ -8,7 +8,6 @@ from pathlib import Path
 class ReceiptFileRecord:
     kind: str
     path: Path
-    storage: str = "vault"
     storage_backend: str = ""
     storage_key: str = ""
     bucket: str = ""
@@ -24,7 +23,6 @@ class ReceiptRecord:
     receipt_id: str
     owner_user_id: int
     note_rel: Path
-    manifest_rel: Path
     date: str
     merchant: str
     amount: str
@@ -33,5 +31,4 @@ class ReceiptRecord:
     files: tuple[Path, ...]
     document_type: str = "receipt"
     document_id: str = ""
-    source: str = "manifest"
     file_records: tuple[ReceiptFileRecord, ...] = ()

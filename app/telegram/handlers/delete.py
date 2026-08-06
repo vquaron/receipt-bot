@@ -21,7 +21,7 @@ async def delete_receipt_command(update: Update, context: ContextTypes.DEFAULT_T
         return
     note_name = " ".join(context.args).strip()
     if not note_name:
-        await update.message.reply_text("Укажите заметку: /delete_receipt <receipt_id или file.md>")
+        await update.message.reply_text("Укажите документ: /delete_receipt <document_id|receipt_id>")
         return
     access_control = access(context)
     allow_all = access_control.is_admin(update.effective_user.id)

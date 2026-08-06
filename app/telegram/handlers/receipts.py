@@ -17,10 +17,8 @@ from app.repositories.documents import (
 )
 from app.receipts.document_types import document_type_label
 from app.receipts.repository import ReceiptCopyError, ReceiptNotFoundError
-from app.storage.paths import safe_vault_path
 from app.telegram.handlers.access import ensure_access
 from app.telegram.handlers.common import access, receipts, send_text_chunks, settings
-from app.users.paths import user_root_rel
 
 
 LOGGER = logging.getLogger(__name__)
@@ -53,7 +51,7 @@ async def receipt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     query = " ".join(context.args).strip()
     if not query:
-        await update.message.reply_text("Использование: /receipt <receipt_id или file.md>")
+        await update.message.reply_text("Использование: /receipt <document_id|receipt_id>")
         return
     record = receipts(context).find_user_receipt(update.effective_user.id, query)
     if record is None:
@@ -116,7 +114,7 @@ async def grant_receipt_command(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("Команда доступна только администратору.")
         return
     if len(context.args) < 2:
-        await update.message.reply_text("Использование: /grant_receipt <user_id> <receipt_id или file.md>")
+        await update.message.reply_text("Использование: /grant_receipt <user_id> <document_id|receipt_id>")
         return
     try:
         target_user_id = int(context.args[0])
@@ -146,58 +144,22 @@ async def grant_receipt_command(update: Update, context: ContextTypes.DEFAULT_TY
         )
     )
 
-
-def _first_existing_file(vault, rel_paths, *, prefixes: tuple[str, ...], suffixes: tuple[str, ...]):
-    for rel_path in rel_paths:
-        rel_text = rel_path.as_posix()
-        if not rel_text.startswith(prefixes) or not rel_text.lower().endswith(suffixes):
-            continue
-        try:
-            path = safe_vault_path(vault, rel_path)
-        except ValueError:
-            continue
-        if path.exists() and path.is_file():
-            return path
-    return None
-
-
 def _record_paths(record, context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    if record.source == "db":
-        image_file = (
-            _first_record_file(record, FILE_KIND_STORED_IMAGE)
-            or _first_record_file(record, FILE_KIND_ORIGINAL_IMAGE)
-            or _first_record_file(record, FILE_KIND_OBSIDIAN_ATTACHMENT)
-        )
-        note_file = _first_record_file(record, FILE_KIND_OBSIDIAN_NOTE)
-        image_path = (
-            receipts(context).materialize_file(
-                image_file,
-                settings(context).tmp_storage_dir / "telegram" / str(record.owner_user_id) / record.receipt_id,
-            )
-            if image_file is not None
-            else None
-        )
-        note_path = receipts(context).file_path(note_file) if note_file is not None else None
-        return note_path, image_path
-
-    vault = settings(context).obsidian_vault
-    try:
-        user_prefix = f"{user_root_rel(settings(context), user_id).as_posix()}/"
-    except ValueError:
-        LOGGER.error(
-            "Invalid USER_VAULT_ROOT configuration while opening receipt for user_id=%s receipt_id=%s",
-            user_id,
-            record.receipt_id,
-            exc_info=True,
-        )
-        raise
-    note_path = safe_vault_path(vault, record.note_rel)
-    image_path = _first_existing_file(
-        vault,
-        record.files,
-        prefixes=(user_prefix,),
-        suffixes=(".jpg", ".jpeg", ".png"),
+    image_file = (
+        _first_record_file(record, FILE_KIND_STORED_IMAGE)
+        or _first_record_file(record, FILE_KIND_ORIGINAL_IMAGE)
+        or _first_record_file(record, FILE_KIND_OBSIDIAN_ATTACHMENT)
     )
+    note_file = _first_record_file(record, FILE_KIND_OBSIDIAN_NOTE)
+    image_path = (
+        receipts(context).materialize_file(
+            image_file,
+            settings(context).tmp_storage_dir / "telegram" / str(record.owner_user_id) / record.receipt_id,
+        )
+        if image_file is not None
+        else None
+    )
+    note_path = receipts(context).file_path(note_file) if note_file is not None else None
     return note_path, image_path
 
 

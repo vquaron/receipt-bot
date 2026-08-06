@@ -18,8 +18,8 @@ def test_scoped_corrections_apply_only_fields(tmp_path: Path) -> None:
         "items": [{**before["items"][0], "name_ru": "Пакет большой", "unit": "шт"}],
     }
 
-    assert store.learn(before, after, created_by_telegram_user_id=777) == 4
-    applied = store.apply(before)
+    assert store.learn(before, after, owner_telegram_user_id=777, created_by_telegram_user_id=777) == 4
+    applied = store.apply(before, owner_telegram_user_id=777)
 
     assert applied["merchant"] == "Zovq Supermarket"
     assert applied["items"][0]["name_ru"] == "Пакет большой"
@@ -28,38 +28,39 @@ def test_scoped_corrections_apply_only_fields(tmp_path: Path) -> None:
     with connect_database(app_settings) as connection:
         rows = connection.execute(
             """
-            select scope, source, target, usage_count, last_used_at, created_by_telegram_user_id
+            select scope, source, target, usage_count, last_used_at, owner_telegram_user_id, created_by_telegram_user_id
             from correction_rules
             order by scope, source
             """
         ).fetchall()
     assert len(rows) == 4
     assert {row["scope"] for row in rows} == {"merchant", "unit", "item_name_ru", "item_name_original"}
+    assert {int(row["owner_telegram_user_id"]) for row in rows} == {777}
     assert {int(row["created_by_telegram_user_id"]) for row in rows} == {777}
     assert sum(int(row["usage_count"]) for row in rows) == 3
     assert all(row["last_used_at"] for row in rows if int(row["usage_count"]))
 
 
-def test_exact_lookup_has_priority_over_case_insensitive(tmp_path: Path) -> None:
+def test_exact_lookup_has_priority_over_case_insensitive_for_owner(tmp_path: Path) -> None:
     app_settings = _settings(tmp_path)
     CorrectionStore(app_settings)
     with connect_database(app_settings) as connection:
         connection.execute(
             """
-            insert into correction_rules(scope, source, target, language, document_type, merchant, created_at, updated_at)
-            values (?, ?, ?, '', '', '', ?, ?)
+            insert into correction_rules(owner_telegram_user_id, scope, source, target, language, document_type, merchant, created_at, updated_at)
+            values (?, ?, ?, ?, '', '', '', ?, ?)
             """,
-            ("unit", "WT", "case exact", "now", "now"),
+            (777, "unit", "WT", "case exact", "now", "now"),
         )
         connection.execute(
             """
-            insert into correction_rules(scope, source, target, language, document_type, merchant, created_at, updated_at)
-            values (?, ?, ?, '', '', '', ?, ?)
+            insert into correction_rules(owner_telegram_user_id, scope, source, target, language, document_type, merchant, created_at, updated_at)
+            values (?, ?, ?, ?, '', '', '', ?, ?)
             """,
-            ("unit", "wt", "case insensitive", "now", "now"),
+            (777, "unit", "wt", "case insensitive", "now", "now"),
         )
 
-    applied = CorrectionStore(app_settings).apply(_receipt())
+    applied = CorrectionStore(app_settings).apply(_receipt(), owner_telegram_user_id=777)
 
     assert applied["items"][0]["unit"] == "case exact"
 
@@ -71,9 +72,9 @@ def test_learning_updates_changed_target_without_duplicate(tmp_path: Path) -> No
     first = {**before, "merchant": "First"}
     second = {**before, "merchant": "Second"}
 
-    assert store.learn(before, first) == 1
-    assert store.learn(before, first) == 0
-    assert store.learn(before, second) == 1
+    assert store.learn(before, first, owner_telegram_user_id=777) == 1
+    assert store.learn(before, first, owner_telegram_user_id=777) == 0
+    assert store.learn(before, second, owner_telegram_user_id=777) == 1
 
     with connect_database(app_settings) as connection:
         rows = connection.execute(
@@ -82,7 +83,7 @@ def test_learning_updates_changed_target_without_duplicate(tmp_path: Path) -> No
     assert [(row["source"], row["target"]) for row in rows] == [("Զովք", "Second")]
 
 
-def test_legacy_json_imports_once_when_database_is_empty(tmp_path: Path) -> None:
+def test_legacy_json_is_not_imported_or_applied(tmp_path: Path) -> None:
     app_settings = _settings(tmp_path)
     app_settings.data_dir.mkdir(parents=True)
     legacy_path = app_settings.data_dir / "corrections.json"
@@ -100,14 +101,14 @@ def test_legacy_json_imports_once_when_database_is_empty(tmp_path: Path) -> None
     )
 
     store = CorrectionStore(app_settings)
-    assert store.apply(_receipt())["merchant"] == "Zovq Supermarket"
+    assert store.apply(_receipt(), owner_telegram_user_id=777)["merchant"] == "Zovq Supermarket"
     legacy_path.write_text(json.dumps({"merchants": {"Զովք": "Changed"}}, ensure_ascii=False), encoding="utf-8")
     store = CorrectionStore(app_settings)
 
-    assert store.apply(_receipt())["merchant"] == "Zovq Supermarket"
+    assert store.apply(_receipt(), owner_telegram_user_id=777)["merchant"] == "Zovq Supermarket"
     with connect_database(app_settings) as connection:
         count = connection.execute("select count(*) as count from correction_rules").fetchone()["count"]
-    assert count == 4
+    assert count == 0
 
 
 def test_invalid_legacy_json_does_not_break_startup(tmp_path: Path) -> None:
@@ -120,14 +121,14 @@ def test_invalid_legacy_json_does_not_break_startup(tmp_path: Path) -> None:
     with connect_database(app_settings) as connection:
         count = connection.execute("select count(*) as count from correction_rules").fetchone()["count"]
     assert count == 0
-    assert store.apply({**_receipt(), "merchant": "Արարատ"})["merchant"] == "Արարատ"
+    assert store.apply({**_receipt(), "merchant": "Արարատ"}, owner_telegram_user_id=777)["merchant"] == "Արարատ"
 
 
 def test_learning_does_not_write_legacy_json(tmp_path: Path) -> None:
     app_settings = _settings(tmp_path)
     store = CorrectionStore(app_settings)
 
-    assert store.learn(_receipt(), {**_receipt(), "merchant": "Zovq"}) == 1
+    assert store.learn(_receipt(), {**_receipt(), "merchant": "Zovq"}, owner_telegram_user_id=777) == 1
 
     assert not (app_settings.data_dir / "corrections.json").exists()
 
@@ -135,16 +136,60 @@ def test_learning_does_not_write_legacy_json(tmp_path: Path) -> None:
 def test_parse_for_review_applies_db_backed_corrections(monkeypatch, tmp_path: Path) -> None:
     app_settings = _settings(tmp_path)
     store = CorrectionStore(app_settings)
-    store.learn(_receipt(), {**_receipt(), "merchant": "Corrected"})
+    store.learn(_receipt(), {**_receipt(), "merchant": "Corrected"}, owner_telegram_user_id=777)
 
     def fake_parse_receipt_text(ocr_text: str, *, api_key: str, model: str, document_type: str) -> ParsedReceipt:
         return ParsedReceipt(data=_receipt(), raw_response="{}")
 
     monkeypatch.setattr(receipt_pipeline, "parse_receipt_text", fake_parse_receipt_text)
 
-    parsed = receipt_pipeline.parse_for_review("ocr", settings=app_settings, correction_store=store)
+    parsed = receipt_pipeline.parse_for_review(
+        "ocr",
+        settings=app_settings,
+        correction_store=store,
+        owner_telegram_user_id=777,
+    )
 
     assert parsed.data["merchant"] == "Corrected"
+
+
+def test_user_scoped_rules_do_not_apply_to_other_users(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    store = CorrectionStore(app_settings)
+
+    assert store.learn(_receipt(), {**_receipt(), "merchant": "User One"}, owner_telegram_user_id=111) == 1
+
+    assert store.apply(_receipt(), owner_telegram_user_id=111)["merchant"] == "User One"
+    assert store.apply(_receipt(), owner_telegram_user_id=222)["merchant"] == "Zovq Supermarket"
+
+
+def test_users_can_have_different_targets_for_same_source(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    store = CorrectionStore(app_settings)
+
+    assert store.learn(_receipt(), {**_receipt(), "merchant": "User One"}, owner_telegram_user_id=111) == 1
+    assert store.learn(_receipt(), {**_receipt(), "merchant": "User Two"}, owner_telegram_user_id=222) == 1
+
+    assert store.apply(_receipt(), owner_telegram_user_id=111)["merchant"] == "User One"
+    assert store.apply(_receipt(), owner_telegram_user_id=222)["merchant"] == "User Two"
+
+
+def test_ownerless_rows_are_disabled(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    CorrectionStore(app_settings)
+    with connect_database(app_settings) as connection:
+        connection.execute(
+            """
+            insert into correction_rules(scope, source, target, language, document_type, merchant, created_at, updated_at)
+            values (?, ?, ?, '', '', '', ?, ?)
+            """,
+            ("merchant", "Զովք", "Ownerless", "now", "now"),
+        )
+
+    store = CorrectionStore(app_settings)
+
+    assert store.apply(_receipt(), owner_telegram_user_id=777)["merchant"] == "Zovq Supermarket"
+    assert store.apply(_receipt())["merchant"] == "Zovq Supermarket"
 
 
 def _receipt() -> dict[str, object]:

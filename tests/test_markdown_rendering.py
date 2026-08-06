@@ -17,8 +17,8 @@ def test_markdown_frontmatter_has_only_receipt_properties() -> None:
         },
         note_date="2026-04-07",
         attachment_rel=Path("Attachments/receipts/2026/04/a.jpg"),
-        clean_rel=Path("OCR/2026/04/a.clean.hy.txt"),
-        source_rel=Path("OCR_VERIFIED/2026/04/a.verified.hy.txt"),
+        clean_rel=None,
+        source_rel=None,
         possible_errors=[],
     )
     frontmatter = markdown.split("---")[1].strip().splitlines()
@@ -54,8 +54,8 @@ def test_markdown_renders_items_table() -> None:
         },
         note_date="2026-04-07",
         attachment_rel=Path("Attachments/receipts/2026/04/a.jpg"),
-        clean_rel=Path("OCR/2026/04/a.clean.hy.txt"),
-        source_rel=Path("OCR_VERIFIED/2026/04/a.verified.hy.txt"),
+        clean_rel=None,
+        source_rel=None,
         possible_errors=[],
     )
     assert "| 1 | Пакет большой | 20 | 1 | шт | 20 |" in markdown
@@ -75,10 +75,11 @@ def test_markdown_renders_order_title_for_order_screenshots() -> None:
         },
         note_date="2026-04-07",
         attachment_rel=Path("Attachments/receipts/2026/04/a.jpg"),
-        clean_rel=Path("OCR/2026/04/a.clean.hy.txt"),
-        source_rel=Path("OCR_VERIFIED/2026/04/a.verified.hy.txt"),
+        clean_rel=None,
+        source_rel=None,
         possible_errors=[],
         document_type=DOCUMENT_TYPE_ORDER,
     )
     assert "# Заказ — Delivery App — 5000 AMD" in markdown
     assert "## Заказ на русском" in markdown
+    assert "## Контроль OCR" not in markdown

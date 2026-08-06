@@ -1,19 +1,15 @@
 from __future__ import annotations
 
-import json
 import zipfile
 from datetime import datetime
 from pathlib import Path
 
-import pytest
-
 from app.config import Settings
-from app.obsidian.delete import ReceiptDeleteError, delete_receipt
-from app.obsidian.writer import write_receipt_note
 from app.receipts.repository import ReceiptRepository
+from app.repositories.documents import DocumentRepository
 from app.review.models import ReceiptSession
 from app.telegram.handlers.receipt import _quota_message
-from app.telegram.handlers.receipts import _cleanup_materialized_tmp_file, _first_existing_file
+from app.telegram.handlers.receipts import _cleanup_materialized_tmp_file
 from app.users.access_service import AccessControl
 from app.users.models import UserRole
 from app.users.quotas import QuotaService
@@ -71,117 +67,28 @@ def test_quota_message_describes_attempt_limit() -> None:
     assert "лимит попыток" in _quota_message("monthly_limit", 10, 20, 20, 20)
 
 
-def test_receipt_note_is_written_under_user_root_and_indexed(tmp_path: Path) -> None:
+def test_db_receipt_export_is_written_under_user_root_and_indexed(tmp_path: Path) -> None:
     app_settings = settings(tmp_path)
-    session = _session(tmp_path, user_id=222)
-    artifact = write_receipt_note(app_settings, session, _parsed_receipt())
+    created = DocumentRepository(app_settings).create_confirmed_from_session(_session(app_settings, user_id=222), _parsed_receipt())
 
-    assert artifact.note_path.relative_to(tmp_path).parts[:3] == ("Users", "222", "Receipts")
-    manifest = json.loads(artifact.manifest_path.read_text(encoding="utf-8"))
-    assert manifest["owner_user_id"] == 222
-    assert manifest["receipt_id"] == artifact.receipt_id
-    assert manifest["note"].startswith("Users/222/Receipts/")
+    assert created.record.note_rel.parts[:3] == ("Users", "222", "Receipts")
+    assert not (tmp_path / "Users/222/MANIFEST").exists()
+    assert not (tmp_path / "Users/222/OCR").exists()
+    assert not (tmp_path / "Users/222/OCR_VERIFIED").exists()
 
     records = ReceiptRepository(app_settings).list_user_receipts(222)
-    assert [record.receipt_id for record in records] == [artifact.receipt_id]
+    assert [record.receipt_id for record in records] == [created.record.receipt_id]
 
     archive = ReceiptRepository(app_settings).export_user_receipts(222)
     with zipfile.ZipFile(archive) as zip_file:
         assert any(name.startswith("Receipts/") and name.endswith(".md") for name in zip_file.namelist())
 
-    copied = ReceiptRepository(app_settings).copy_receipt_to_user(artifact.receipt_id, 333)
+    copied = ReceiptRepository(app_settings).copy_receipt_to_user(created.record.document_id, 333)
     assert copied.owner_user_id == 333
     assert copied.note_rel.parts[:3] == ("Users", "333", "Receipts")
     copied_note = (tmp_path / copied.note_rel).read_text(encoding="utf-8")
     assert "Users/333/Attachments/receipts/" in copied_note
     assert "Users/222/Attachments/receipts/" not in copied_note
-
-
-def test_delete_receipt_rejects_manifest_files_outside_user_root(tmp_path: Path) -> None:
-    note = tmp_path / "Users/222/Receipts/2026/05/a.md"
-    manifest = tmp_path / "Users/222/MANIFEST/receipts/2026/05/a.manifest.json"
-    foreign = tmp_path / "Users/333/secret.txt"
-    for path in (note, manifest, foreign):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("x", encoding="utf-8")
-    manifest.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "note": "Users/222/Receipts/2026/05/a.md",
-                "files": ["Users/222/Receipts/2026/05/a.md", "Users/333/secret.txt"],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ReceiptDeleteError):
-        delete_receipt(tmp_path, "a.md", owner_user_id=222)
-    assert foreign.exists()
-
-
-def test_delete_receipt_uses_configured_user_vault_root(tmp_path: Path) -> None:
-    note = tmp_path / "Members/222/Receipts/2026/05/a.md"
-    image = tmp_path / "Members/222/Attachments/receipts/2026/05/a.jpg"
-    manifest = tmp_path / "Members/222/MANIFEST/receipts/2026/05/a.manifest.json"
-    for path in (note, image, manifest):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("x", encoding="utf-8")
-    manifest.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "note": "Members/222/Receipts/2026/05/a.md",
-                "files": ["Members/222/Receipts/2026/05/a.md", "Members/222/Attachments/receipts/2026/05/a.jpg"],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = delete_receipt(tmp_path, "a.md", owner_user_id=222, user_vault_root="Members")
-    assert len(result.deleted) == 3
-    assert not note.exists()
-    assert not image.exists()
-    assert not manifest.exists()
-
-
-def test_delete_receipt_markdown_fallback_uses_configured_user_vault_root(tmp_path: Path) -> None:
-    note = tmp_path / "Members/222/Receipts/2026/05/a.md"
-    image = tmp_path / "Members/222/Attachments/receipts/2026/05/a.jpg"
-    clean_ocr = tmp_path / "Members/222/OCR/2026/05/a.clean.hy.txt"
-    for path in (note, image, clean_ocr):
-        path.parent.mkdir(parents=True, exist_ok=True)
-    image.write_text("image", encoding="utf-8")
-    clean_ocr.write_text("ocr", encoding="utf-8")
-    note.write_text(
-        "\n".join(
-            [
-                "![[Members/222/Attachments/receipts/2026/05/a.jpg]]",
-                "[[Members/222/OCR/2026/05/a.clean.hy.txt]]",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    result = delete_receipt(tmp_path, "a.md", owner_user_id=222, user_vault_root="Members")
-    assert len(result.deleted) == 3
-    assert not note.exists()
-    assert not image.exists()
-    assert not clean_ocr.exists()
-
-
-def test_first_existing_file_accepts_configured_user_root(tmp_path: Path) -> None:
-    image = tmp_path / "Members/222/Attachments/receipts/2026/05/a.jpg"
-    image.parent.mkdir(parents=True, exist_ok=True)
-    image.write_text("image", encoding="utf-8")
-
-    found = _first_existing_file(
-        tmp_path,
-        [Path("Members/222/Attachments/receipts/2026/05/a.jpg")],
-        prefixes=("Members/222/",),
-        suffixes=(".jpg",),
-    )
-    assert found == image
 
 
 def test_cleanup_materialized_tmp_file_removes_only_tmp_paths(tmp_path: Path) -> None:
@@ -201,53 +108,12 @@ def test_cleanup_materialized_tmp_file_removes_only_tmp_paths(tmp_path: Path) ->
     assert outside.exists()
 
 
-def test_find_any_receipt_uses_configured_user_vault_root(tmp_path: Path) -> None:
-    app_settings = settings(tmp_path, user_vault_root="Members")
-    manifest = tmp_path / "Members/222/MANIFEST/receipts/2026/05/a.manifest.json"
-    manifest.parent.mkdir(parents=True, exist_ok=True)
-    manifest.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "receipt_id": "a",
-                "owner_user_id": 222,
-                "note": "Members/222/Receipts/2026/05/a.md",
-                "files": ["Members/222/Receipts/2026/05/a.md"],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    record = ReceiptRepository(app_settings).find_any_receipt("a")
-    assert record is not None
-    assert record.note_rel.as_posix() == "Members/222/Receipts/2026/05/a.md"
-
-
-def test_find_any_receipt_skips_unsafe_manifest_paths(tmp_path: Path) -> None:
-    app_settings = settings(tmp_path)
-    manifest = tmp_path / "Users/222/MANIFEST/receipts/2026/05/a.manifest.json"
-    manifest.parent.mkdir(parents=True, exist_ok=True)
-    manifest.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "receipt_id": "a",
-                "owner_user_id": 222,
-                "note": "../escape.md",
-                "files": ["../escape.md"],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    assert ReceiptRepository(app_settings).find_any_receipt("a") is None
-
-
-def _session(tmp_path: Path, *, user_id: int) -> ReceiptSession:
-    created_at = datetime(2026, 5, 20, 12, 0, 0)
-    image = tmp_path / f"Users/{user_id}/Attachments/receipts/_tmp/2026/05/tmp.jpg"
-    clean = tmp_path / f"Users/{user_id}/OCR/2026/05/tmp.clean.hy.txt"
-    source = tmp_path / f"Users/{user_id}/OCR_VERIFIED/2026/05/tmp.verified.hy.txt"
+def _session(app_settings: Settings, *, user_id: int) -> ReceiptSession:
+    created_at = datetime.now()
+    temp_dir = app_settings.tmp_storage_dir / "processing" / f"session-{user_id}"
+    image = temp_dir / "original.jpg"
+    clean = temp_dir / "clean.hy.txt"
+    source = temp_dir / "source.hy.txt"
     for path in (image, clean, source):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("x", encoding="utf-8")

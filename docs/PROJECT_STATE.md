@@ -47,11 +47,10 @@ Current implementation status:
 - Confirmed review creates DB rows first, stores canonical images through the
   configured storage backend, stores OCR files under local app storage, and
   generates Obsidian Markdown as an export artifact.
-- Existing Markdown/manifest files remain operational artifacts and fallback
-  data for old receipts, but new manifest JSON files are no longer created by
-  the confirm flow.
-- Delete, grant/copy, and export are DB-first for new documents and keep
-  manifest/Markdown fallback for old receipts.
+- Manifest-backed receipts are no longer runtime data. Old manifest-backed
+  files may be purged without migration; new runtime behavior is DB-only.
+- Delete, grant/copy, list, find, Web API, and export operate only from SQLite
+  `documents` / `document_files`.
 
 ## Current data flow
 
@@ -100,9 +99,10 @@ Telegram photo or /order caption
   detection helpers.
 - `app/review/` - Telegram review payload rendering/parsing and receipt session
   models.
-- `app/receipts/` - document type classification, receipt/order models, legacy
-  receipt listing helpers.
-- `app/obsidian/` - Markdown writer and manifest-based deletion fallback.
+- `app/receipts/` - document type classification, receipt/order models, and the
+  DB-only Telegram receipt repository facade.
+- `app/obsidian/` - Markdown export writer and safe legacy manifest purge
+  tooling.
 - `app/storage/` - path safety helpers, normalization, session temp storage,
   runtime retention cleanup, read-only storage health checks, and correction
   store.
@@ -125,12 +125,8 @@ Current persistent files:
 
 - `Users/<telegram_user_id>/Receipts/YYYY/MM/<file>.md`
 - `Users/<telegram_user_id>/Attachments/receipts/YYYY/MM/<file>.jpg`
-- `Users/<telegram_user_id>/OCR/YYYY/MM/<file>.clean.hy.txt` for legacy
-  manifest-backed receipts only
-- `Users/<telegram_user_id>/OCR_VERIFIED/YYYY/MM/<file>.verified.hy.txt` for
-  legacy manifest-backed receipts only
-- `Users/<telegram_user_id>/MANIFEST/receipts/YYYY/MM/<file>.manifest.json` for
-  legacy manifest-backed receipts only
+- Legacy `Users/<telegram_user_id>/OCR/...`, `OCR_VERIFIED/...`, and
+  `MANIFEST/receipts/...` files are removable old artifacts, not runtime data.
 - `data/debug/openai/<telegram_user_id>/YYYY/MM/...` only for invalid OpenAI
   JSON
 - `data/exports/<telegram_user_id>/receipts_YYYYMMDD_HHMMSS.zip` for user ZIP
@@ -150,8 +146,7 @@ Current persistent files:
   active processing
 - `data/tmp/materialized/`, `data/tmp/exports/`, and `data/tmp/telegram/` for
   short-lived materialized/cache files
-- `data/corrections.json` only as a legacy one-time import source for correction
-  rules when the SQLite table is empty
+- `data/corrections.json` is legacy-only and is not imported automatically
 
 Target storage direction:
 
@@ -224,14 +219,18 @@ Current documents:
   receipt viewing when available.
 - Obsidian Markdown and its exported attachment are recorded as export files in
   `document_files`.
-- New manifest JSON files are not created; manifest parsing remains a fallback
-  for old receipts.
+- New manifest JSON files are not created; manifest parsing has been removed
+  from runtime list/find/delete/copy/export paths.
 - `/delete_receipt` removes files recorded in `document_files`, sets
   `documents.status='deleted'`, and keeps a soft-deleted DB row for audit.
 - `/grant_receipt` deep-copies DB documents to a new document id for the target
   user and regenerates the Obsidian export.
-- `/export_receipts` includes readable Obsidian files plus canonical DB files
-  under `Canonical/<receipt_id>/` in the ZIP archive.
+- `/export_receipts` includes only DB-tracked Obsidian export files plus
+  canonical DB files under `Canonical/<receipt_id>/` in the ZIP archive.
+  Untracked vault files and old manifest-backed files are excluded.
+- `/purge_legacy_manifests` is an admin-only dry-run/apply command that deletes
+  only files declared by valid old manifest JSON files, plus the manifest files
+  themselves. Orphan files without manifest linkage are not bulk-deleted.
 - OpenAI invalid-JSON debug output is stored under `DEBUG_STORAGE_DIR`, not in
   the Obsidian vault.
 - `/storage_health` is an admin-only read-only Telegram command that reports
@@ -245,8 +244,10 @@ Current correction rules:
   `last_used_at` when a rule actually changes a value.
 - `CorrectionStore.learn()` writes scoped rules for merchant, unit, Russian item
   name, and original item name mappings.
-- `data/corrections.json` is imported only once when `correction_rules` is
-  empty, then ignored as runtime storage.
+- Correction rules are owner-scoped by `owner_telegram_user_id`; ownerless
+  rules are disabled and are not applied at runtime.
+- `data/corrections.json` is legacy data only and is not imported
+  automatically.
 
 Current web authorization and PWA:
 
@@ -257,7 +258,8 @@ Current web authorization and PWA:
 - Web MVP is a separate FastAPI service with a lightweight read-only PWA.
 - Web API shows only DB-first documents for the current user: receipt list,
   detail, items, and `stored_image`/`original_image` image endpoint.
-- Legacy manifest receipts are not shown in Web MVP.
+- Legacy manifest receipts are not shown in Web MVP and are not available
+  through Telegram runtime commands.
 
 ## External integrations
 
@@ -294,9 +296,10 @@ Current web authorization and PWA:
 
 - Web MVP is read-only and does not support delete/export/grant/correction-rule
   management yet.
-- Legacy Obsidian exports can include `OCR_VERIFIED`; new DB-first exports do
-  not create permanent `OCR_VERIFIED` files and store OCR canonically in app
-  storage instead.
+- Old manifest-backed Obsidian exports may include `OCR_VERIFIED`, but those
+  artifacts are no longer runtime-supported and can be purged. New DB-first
+  exports do not create permanent `OCR_VERIFIED` files and store OCR canonically
+  in app storage instead.
 - No database migration framework beyond the simple in-project migrations module.
 
 ## Testing and validation
@@ -315,11 +318,11 @@ Current tests cover:
   migration;
 - JSON parsing and receipt detection;
 - Markdown rendering;
-- deletion path safety;
+- deletion and legacy manifest purge path safety;
 - SQLite-backed processing sessions and temp cleanup;
 - DB-first document/item/file creation and Obsidian export without new
   manifests;
-- DB-first delete/copy/export with legacy manifest fallback;
+- DB-first delete/copy/export with old manifest-backed artifacts excluded;
 - generic local/S3 image storage references for canonical images;
 - runtime retention cleanup for exports, debug artifacts, and materialized temp
   files;
@@ -354,4 +357,4 @@ gcloud auth application-default set-quota-project PROJECT_ID
 
 ## Last updated
 
-2026-05-23
+2026-05-31

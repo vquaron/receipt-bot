@@ -14,7 +14,7 @@ import pytest
 
 from app.config import Settings
 from app.db.connection import connect_database
-from app.obsidian.writer import export_receipt_note, write_receipt_note
+from app.obsidian.writer import export_receipt_note
 from app.receipts.repository import ReceiptDeleteError, ReceiptRepository
 from app.repositories.documents import (
     FILE_KIND_CLEAN_OCR,
@@ -43,7 +43,6 @@ def test_confirmed_document_creates_db_rows_files_and_obsidian_export(tmp_path: 
     session = _session(app_settings, user_id=222)
     result = DocumentRepository(app_settings).create_confirmed_from_session(session, _parsed_receipt())
 
-    assert result.record.source == "db"
     assert result.record.receipt_id == "2026-05-20_zovq_supermarket_1234.5AMD"
     assert result.record.document_id
     assert session.image_path.exists()
@@ -110,18 +109,19 @@ def test_file_stem_suffixes_per_user_and_can_repeat_across_users(tmp_path: Path)
     assert other_user.record.receipt_id == "2026-05-20_zovq_supermarket_1234.5AMD"
 
 
-def test_receipt_repository_lists_and_finds_db_documents_before_manifest_fallback(tmp_path: Path) -> None:
+def test_receipt_repository_lists_and_finds_db_documents_only(tmp_path: Path) -> None:
     app_settings = _settings(tmp_path)
     created = DocumentRepository(app_settings).create_confirmed_from_session(_session(app_settings, user_id=222), _parsed_receipt())
+    _write_stray_manifest(app_settings, user_id=222)
     repository = ReceiptRepository(app_settings)
 
     listed = repository.list_user_receipts(222)
     found = repository.find_user_receipt(222, created.record.receipt_id)
 
-    assert listed[0].source == "db"
-    assert listed[0].receipt_id == created.record.receipt_id
+    assert [record.receipt_id for record in listed] == [created.record.receipt_id]
     assert found is not None
     assert found.document_id == created.record.document_id
+    assert repository.find_user_receipt(222, "legacy") is None
     image_file = next(file for file in found.file_records if file.kind == FILE_KIND_ORIGINAL_IMAGE)
     assert repository.file_path(image_file).read_text(encoding="utf-8") == "image"
 
@@ -134,7 +134,6 @@ def test_delete_db_document_removes_files_and_soft_deletes_row(tmp_path: Path) -
 
     result = repository.delete_receipt(created.record.receipt_id, owner_user_id=222)
 
-    assert result.source == "db"
     assert result.receipt_id == created.record.receipt_id
     assert len(result.deleted) == len(files)
     assert result.missing == []
@@ -189,15 +188,14 @@ def test_delete_db_document_rejects_unsafe_path_before_deleting(tmp_path: Path) 
     assert document["deleted_at"] is None
 
 
-def test_delete_legacy_receipt_returns_vault_relative_note_path(tmp_path: Path) -> None:
+def test_delete_ignores_stray_manifest_receipts(tmp_path: Path) -> None:
     app_settings = _settings(tmp_path)
-    legacy_artifact = write_receipt_note(app_settings, _legacy_session(tmp_path, user_id=222), _parsed_receipt())
+    _write_stray_manifest(app_settings, user_id=222)
     repository = ReceiptRepository(app_settings)
 
-    result = repository.delete_receipt(legacy_artifact.receipt_id, owner_user_id=222)
-
-    assert result.source == "legacy"
-    assert result.note_path == legacy_artifact.note_path.relative_to(app_settings.obsidian_vault)
+    with pytest.raises(ReceiptDeleteError):
+        repository.delete_receipt("legacy", owner_user_id=222)
+    assert (app_settings.obsidian_vault / "Users/222/MANIFEST/receipts/2026/05/legacy.manifest.json").exists()
 
 
 def test_non_admin_cannot_delete_another_users_db_document(tmp_path: Path) -> None:
@@ -235,7 +233,6 @@ def test_copy_db_document_deep_copies_rows_and_files(tmp_path: Path) -> None:
 
     copied = repository.copy_receipt_to_user(source.record.document_id, 333)
 
-    assert copied.source == "db"
     assert copied.owner_user_id == 333
     assert copied.document_id != source.record.document_id
     assert copied.receipt_id == source.record.receipt_id
@@ -268,21 +265,26 @@ def test_copy_db_document_suffixes_target_file_stem_on_collision(tmp_path: Path)
     assert copied.receipt_id == f"{source.record.receipt_id}_2"
 
 
-def test_export_user_receipts_includes_legacy_and_db_canonical_files(tmp_path: Path) -> None:
+def test_export_user_receipts_includes_only_db_tracked_files(tmp_path: Path) -> None:
     app_settings = _settings(tmp_path)
-    legacy_session = _legacy_session(tmp_path, user_id=222)
-    legacy_artifact = write_receipt_note(app_settings, legacy_session, _parsed_receipt())
+    _write_stray_manifest(app_settings, user_id=222)
+    stray_note = app_settings.obsidian_vault / "Users/222/Receipts/2026/05/untracked.md"
+    stray_note.parent.mkdir(parents=True, exist_ok=True)
+    stray_note.write_text("untracked", encoding="utf-8")
     db_created = DocumentRepository(app_settings).create_confirmed_from_session(_session(app_settings, user_id=222), _parsed_receipt(merchant="DB Store"))
 
     archive_path = ReceiptRepository(app_settings).export_user_receipts(222)
 
     with zipfile.ZipFile(archive_path) as archive:
         names = set(archive.namelist())
-    assert "Receipts/2026/05/" + legacy_artifact.file_name in names
+    assert f"Receipts/2026/05/{db_created.record.receipt_id}.md" in names
+    assert f"Attachments/receipts/2026/05/{db_created.record.receipt_id}.jpg" in names
     assert f"Canonical/{db_created.record.receipt_id}/original.jpg" in names
     assert f"Canonical/{db_created.record.receipt_id}/stored.jpg" in names
     assert f"Canonical/{db_created.record.receipt_id}/clean.hy.txt" in names
     assert f"Canonical/{db_created.record.receipt_id}/source.hy.txt" in names
+    assert not any("MANIFEST" in name for name in names)
+    assert "Receipts/2026/05/untracked.md" not in names
 
 
 def test_export_user_receipts_uses_configured_export_storage_dir(tmp_path: Path) -> None:
@@ -668,24 +670,6 @@ def _session(app_settings: Settings, *, user_id: int, session_id: str = "session
     )
 
 
-def _legacy_session(tmp_path: Path, *, user_id: int) -> ReceiptSession:
-    created_at = datetime(2026, 5, 20, 12, 0, 0)
-    image = tmp_path / f"Users/{user_id}/Attachments/receipts/_tmp/2026/05/tmp.jpg"
-    clean = tmp_path / f"Users/{user_id}/OCR/2026/05/tmp.clean.hy.txt"
-    source = tmp_path / f"Users/{user_id}/OCR_VERIFIED/2026/05/tmp.verified.hy.txt"
-    for path in (image, clean, source):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("legacy", encoding="utf-8")
-    return ReceiptSession(
-        user_id=user_id,
-        image_path=image,
-        clean_ocr_path=clean,
-        source_ocr_path=source,
-        temporary_base_name="tmp",
-        created_at=created_at,
-    )
-
-
 def _parsed_receipt(*, merchant: str = "Zovq Supermarket") -> dict[str, object]:
     return {
         "date": "2026-05-20",
@@ -711,6 +695,30 @@ def _parsed_receipt(*, merchant: str = "Zovq Supermarket") -> dict[str, object]:
         ],
         "possible_errors": ["amount: проверить сумму"],
     }
+
+
+def _write_stray_manifest(app_settings: Settings, *, user_id: int) -> None:
+    manifest = app_settings.obsidian_vault / f"Users/{user_id}/MANIFEST/receipts/2026/05/legacy.manifest.json"
+    note = app_settings.obsidian_vault / f"Users/{user_id}/Receipts/2026/05/legacy.md"
+    image = app_settings.obsidian_vault / f"Users/{user_id}/Attachments/receipts/2026/05/legacy.jpg"
+    for path in (manifest, note, image):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("legacy", encoding="utf-8")
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "receipt_id": "legacy",
+                "owner_user_id": user_id,
+                "note": f"Users/{user_id}/Receipts/2026/05/legacy.md",
+                "files": [
+                    f"Users/{user_id}/Receipts/2026/05/legacy.md",
+                    f"Users/{user_id}/Attachments/receipts/2026/05/legacy.jpg",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 class _FakeImageStore:

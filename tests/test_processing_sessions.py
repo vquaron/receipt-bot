@@ -24,6 +24,7 @@ def settings(tmp_path: Path, **overrides) -> Settings:
         "data_dir": tmp_path / "data",
         "admin_telegram_user_ids": frozenset(),
         "allowed_telegram_user_ids": frozenset(),
+        "storage_retention_tmp_hours": 24 * 365,
     }
     values["obsidian_vault"].mkdir()
     values.update(overrides)
@@ -172,6 +173,103 @@ def test_active_review_session_blocks_new_photo_before_quota(monkeypatch, tmp_pa
     assert message.texts == ["У вас уже есть активная обработка. Подтвердите или отмените текущую сессию."]
 
 
+def test_revoked_user_cannot_confirm_active_review_callback(monkeypatch, tmp_path: Path) -> None:
+    app_settings = settings(tmp_path)
+    active = _session(app_settings, state=SessionState.WAITING_FOR_RUSSIAN_REVIEW)
+    active.parsed_receipt = {"merchant": "Keep"}
+    receipt_handler.SESSIONS.clear()
+    receipt_handler.SESSIONS[active.user_id] = active
+
+    async def deny_access(update, context) -> bool:
+        return False
+
+    async def fail_if_finalized(session, reply_target, context) -> None:
+        raise AssertionError("revoked callback must not finalize a document")
+
+    monkeypatch.setattr(receipt_handler, "ensure_access", deny_access)
+    monkeypatch.setattr(receipt_handler, "create_note_from_review", fail_if_finalized)
+    update = _callback_update(active.user_id, "review_confirm")
+
+    try:
+        asyncio.run(receipt_handler.handle_callback(update, SimpleNamespace()))
+    finally:
+        receipt_handler.SESSIONS.clear()
+
+    assert update.callback_query.answered
+    assert active.state == SessionState.WAITING_FOR_RUSSIAN_REVIEW
+    assert active.parsed_receipt == {"merchant": "Keep"}
+
+
+def test_revoked_user_cannot_edit_active_review_callback(monkeypatch, tmp_path: Path) -> None:
+    app_settings = settings(tmp_path)
+    active = _session(app_settings, state=SessionState.WAITING_FOR_RUSSIAN_REVIEW)
+    active.parsed_receipt = {"merchant": "Keep"}
+    receipt_handler.SESSIONS.clear()
+    receipt_handler.SESSIONS[active.user_id] = active
+
+    async def deny_access(update, context) -> bool:
+        return False
+
+    def fail_if_saved(session, context) -> None:
+        raise AssertionError("revoked callback must not change review state")
+
+    monkeypatch.setattr(receipt_handler, "ensure_access", deny_access)
+    monkeypatch.setattr(receipt_handler, "save_session", fail_if_saved)
+    update = _callback_update(active.user_id, "review_edit")
+
+    try:
+        asyncio.run(receipt_handler.handle_callback(update, SimpleNamespace()))
+    finally:
+        receipt_handler.SESSIONS.clear()
+
+    assert update.callback_query.answered
+    assert active.state == SessionState.WAITING_FOR_RUSSIAN_REVIEW
+
+
+def test_allowed_review_callbacks_still_dispatch(monkeypatch, tmp_path: Path) -> None:
+    app_settings = settings(tmp_path)
+    active = _session(app_settings, state=SessionState.WAITING_FOR_RUSSIAN_REVIEW)
+    active.parsed_receipt = {"merchant": "Ok"}
+    receipt_handler.SESSIONS.clear()
+    receipt_handler.SESSIONS[active.user_id] = active
+    calls: list[str] = []
+
+    async def allow_access(update, context) -> bool:
+        return True
+
+    async def record_finalize(session, reply_target, context) -> None:
+        calls.append(f"finalize:{session.user_id}")
+
+    monkeypatch.setattr(receipt_handler, "ensure_access", allow_access)
+    monkeypatch.setattr(receipt_handler, "create_note_from_review", record_finalize)
+    update = _callback_update(active.user_id, "review_confirm")
+
+    try:
+        asyncio.run(receipt_handler.handle_callback(update, SimpleNamespace()))
+    finally:
+        receipt_handler.SESSIONS.clear()
+
+    assert calls == ["finalize:222"]
+
+
+def test_access_callbacks_do_not_use_review_access_recheck(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fail_if_checked(update, context) -> bool:
+        raise AssertionError("access callbacks are handled by the access callback flow")
+
+    async def record_access_callback(update, context) -> None:
+        calls.append(update.callback_query.data)
+
+    monkeypatch.setattr(receipt_handler, "ensure_access", fail_if_checked)
+    monkeypatch.setattr(receipt_handler, "handle_access_callback", record_access_callback)
+    update = _callback_update(999, "access_approve:222")
+
+    asyncio.run(receipt_handler.handle_callback(update, SimpleNamespace()))
+
+    assert calls == ["access_approve:222"]
+
+
 def test_save_session_does_not_mutate_memory_when_storage_fails(tmp_path: Path) -> None:
     app_settings = settings(tmp_path)
     session = _session_with_identity(
@@ -223,6 +321,22 @@ class _FakeMessage:
 
     async def reply_text(self, text: str, **kwargs) -> None:
         self.texts.append(text)
+
+
+class _FakeCallbackQuery:
+    def __init__(self, data: str, message: _FakeMessage) -> None:
+        self.data = data
+        self.message = message
+        self.answered = False
+
+    async def answer(self) -> None:
+        self.answered = True
+
+
+def _callback_update(user_id: int, data: str):
+    message = _FakeMessage()
+    query = _FakeCallbackQuery(data, message)
+    return SimpleNamespace(effective_user=SimpleNamespace(id=user_id), callback_query=query)
 
 
 def _session(app_settings: Settings, *, state: SessionState) -> ReceiptSession:

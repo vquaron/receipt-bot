@@ -17,6 +17,7 @@ def parse_for_review(
     settings: Settings,
     correction_store: CorrectionStore,
     document_type: str = DOCUMENT_TYPE_RECEIPT,
+    owner_telegram_user_id: int | None = None,
 ) -> ParsedReceipt:
     parsed = parse_receipt_text(
         ocr_text,
@@ -25,6 +26,6 @@ def parse_for_review(
         document_type=document_type,
     )
     return ParsedReceipt(
-        data=correction_store.apply(parsed.data),
+        data=correction_store.apply(parsed.data, owner_telegram_user_id=owner_telegram_user_id),
         raw_response=parsed.raw_response,
     )

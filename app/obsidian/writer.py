@@ -1,20 +1,15 @@
 from __future__ import annotations
 
-import json
 import shutil
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
 from app.config import Settings
-from app.receipts.document_types import document_title_ru, normalize_document_type
+from app.receipts.document_types import document_title_ru
 from app.review.models import ReceiptSession
-from app.storage.normalization import (
-    amount_for_filename,
-    normalize_receipt_properties,
-    slugify_merchant,
-)
-from app.storage.paths import ensure_parent, next_available_stem, yaml_string
+from app.storage.normalization import normalize_receipt_properties
+from app.storage.paths import ensure_parent, yaml_string
 from app.users.paths import user_dated_relpath
 
 
@@ -23,7 +18,6 @@ class ReceiptArtifact:
     receipt_id: str
     file_name: str
     note_path: Path
-    manifest_path: Path | None
     date: str
     merchant: str
     amount: str
@@ -31,92 +25,6 @@ class ReceiptArtifact:
     attachment_path: Path | None = None
     note_rel: Path | None = None
     attachment_rel: Path | None = None
-
-
-def write_receipt_note(
-    settings: Settings,
-    session: ReceiptSession,
-    parsed: dict[str, object],
-) -> ReceiptArtifact:
-    normalized = normalize_receipt_properties(parsed)
-    document_type = normalize_document_type(session.document_type)
-    note_date, used_fallback_date = _resolve_note_date(str(normalized.get("date", "")))
-    merchant = str(normalized.get("merchant", "")) or "unknown_merchant"
-    amount = str(normalized.get("amount", ""))
-    amount_for_name = amount_for_filename(amount)
-    merchant_slug = slugify_merchant(merchant)
-
-    base_stem = f"{note_date.isoformat()}_{merchant_slug}_{amount_for_name}AMD"
-    receipt_dir = settings.obsidian_vault / user_dated_relpath(settings, session.user_id, "Receipts", _as_datetime(note_date), "")
-    stem = next_available_stem(receipt_dir, base_stem, ".md")
-
-    note_rel = user_dated_relpath(settings, session.user_id, "Receipts", _as_datetime(note_date), f"{stem}.md")
-    attachment_rel = user_dated_relpath(settings, session.user_id, "Attachments/receipts", _as_datetime(note_date), f"{stem}.jpg")
-    clean_rel = user_dated_relpath(settings, session.user_id, "OCR", _as_datetime(note_date), f"{stem}.clean.hy.txt")
-    source_rel = user_dated_relpath(settings, session.user_id, "OCR_VERIFIED", _as_datetime(note_date), f"{stem}.verified.hy.txt")
-    manifest_rel = user_dated_relpath(settings, session.user_id, "MANIFEST/receipts", _as_datetime(note_date), f"{stem}.manifest.json")
-
-    note_path = settings.obsidian_vault / note_rel
-    attachment_path = settings.obsidian_vault / attachment_rel
-    clean_path = settings.obsidian_vault / clean_rel
-    source_path = settings.obsidian_vault / source_rel
-    manifest_path = settings.obsidian_vault / manifest_rel
-
-    for path in (note_path, attachment_path, clean_path, source_path, manifest_path):
-        ensure_parent(path)
-
-    shutil.move(str(session.image_path), attachment_path)
-    shutil.move(str(session.clean_ocr_path), clean_path)
-    shutil.move(str(session.source_ocr_path), source_path)
-
-    possible_errors = _normalized_possible_errors(normalized.get("possible_errors", []))
-    if used_fallback_date:
-        possible_errors.append("Дата не определена из чека; использована текущая дата.")
-
-    note_path.write_text(
-        render_markdown(
-            parsed=normalized,
-            note_date=note_date.isoformat(),
-            attachment_rel=attachment_rel,
-            clean_rel=clean_rel,
-            source_rel=source_rel,
-            possible_errors=possible_errors,
-            document_type=document_type,
-        ),
-        encoding="utf-8",
-    )
-    _write_manifest(
-        manifest_path,
-        {
-            "version": 1,
-            "receipt_id": stem,
-            "owner_user_id": session.user_id,
-            "created_at": datetime.now().isoformat(),
-            "document_type": document_type,
-            "date": note_date.isoformat(),
-            "merchant": merchant,
-            "amount": amount,
-            "currency": "AMD",
-            "note": note_rel.as_posix(),
-            "files": [
-                note_rel.as_posix(),
-                attachment_rel.as_posix(),
-                clean_rel.as_posix(),
-                source_rel.as_posix(),
-            ],
-        },
-    )
-
-    return ReceiptArtifact(
-        receipt_id=stem,
-        file_name=f"{stem}.md",
-        note_path=note_path,
-        manifest_path=manifest_path,
-        date=note_date.isoformat(),
-        merchant=merchant,
-        amount=amount or "unknown_amount",
-        currency="AMD",
-    )
 
 
 def export_receipt_note(
@@ -161,7 +69,6 @@ def export_receipt_note(
         receipt_id=file_stem,
         file_name=f"{file_stem}.md",
         note_path=note_path,
-        manifest_path=None,
         date=note_date.isoformat(),
         merchant=merchant,
         amount=amount or "unknown_amount",
@@ -277,10 +184,6 @@ def render_items_table(items: object, *, language: str) -> str:
             + " |"
         )
     return "\n".join(rows) if len(rows) > 1 else "_Товары не распознаны как отдельные строки._"
-
-
-def _write_manifest(path: Path, manifest: dict[str, object]) -> None:
-    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _render_ocr_block(*, clean_rel: Path | None, source_rel: Path | None) -> str:

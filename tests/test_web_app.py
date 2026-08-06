@@ -36,6 +36,10 @@ def test_magic_login_sets_cookie_and_api_lists_db_documents_only(tmp_path: Path)
 
     assert login_response.status_code == 302
     assert app_settings.web_session_cookie_name in login_response.headers["set-cookie"]
+    cookie_header = login_response.headers["set-cookie"].lower()
+    assert "httponly" in cookie_header
+    assert "samesite=lax" in cookie_header
+    assert "secure" in cookie_header
     assert login_response.headers["referrer-policy"] == "no-referrer"
     assert me_response.json()["telegram_user_id"] == 222
     receipts = receipts_response.json()["receipts"]
@@ -99,6 +103,7 @@ def test_api_detail_returns_items_and_owner_scopes_documents(tmp_path: Path) -> 
 
     detail_response = client.get("/api/receipts/receipt-one")
     other_user_response = client.get("/api/receipts/doc-2")
+    other_user_image_response = client.get("/api/receipts/doc-2/image")
 
     assert detail_response.status_code == 200
     payload = detail_response.json()
@@ -106,6 +111,7 @@ def test_api_detail_returns_items_and_owner_scopes_documents(tmp_path: Path) -> 
     assert payload["parsed"]["merchant"] == "Store"
     assert payload["items"][0]["name_ru"] == "Пакет"
     assert other_user_response.status_code == 404
+    assert other_user_image_response.status_code == 404
 
 
 def test_api_hides_deleted_documents(tmp_path: Path) -> None:
@@ -134,6 +140,25 @@ def test_image_endpoint_prefers_stored_image_and_falls_back_to_original(tmp_path
     assert stored_response.headers["cache-control"] == "private, max-age=300"
     assert original_response.status_code == 200
     assert original_response.content == b"original"
+
+
+def test_image_endpoint_rejects_unsafe_db_file_path(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    _insert_document(app_settings, user_id=222, document_id="doc-1", file_stem="receipt-one")
+    with connect_database(app_settings) as connection:
+        connection.execute(
+            """
+            update document_files
+            set path = ?, storage_key = ?
+            where document_id = ? and kind = 'stored_image'
+            """,
+            ("../escape.jpg", "../escape.jpg", "doc-1"),
+        )
+    client = _authenticated_client(app_settings, user_id=222)
+
+    response = client.get("/api/receipts/doc-1/image")
+
+    assert response.status_code == 404
 
 
 def test_logout_revokes_session(tmp_path: Path) -> None:

@@ -27,9 +27,9 @@
 - [x] Should `OCR_VERIFIED` continue as a permanent file?
   - Context: Manual review now happens on Russian fields, not Armenian OCR, so
     permanent `OCR_VERIFIED` may be a misleading duplicate.
-  - Decision: `OCR_VERIFIED` remains a legacy Obsidian artifact only. New
-    DB-first documents do not create permanent `OCR_VERIFIED`; canonical OCR
-    lives in app storage and SQLite `document_files`.
+  - Decision: New DB-first documents do not create permanent `OCR_VERIFIED`;
+    canonical OCR lives in app storage and SQLite `document_files`. Existing
+    `OCR_VERIFIED` files are old manifest-backed artifacts that may be purged.
 
 - [x] What should the first PWA/API include?
   - Context: PWA/API should consume SQLite, not Markdown.
@@ -51,13 +51,14 @@
   behavior from planned schema.
 - Legacy JSON access import should not be reintroduced; `.env` bootstrap and
   SQLite-backed admin approval are the supported access paths.
-- Markdown/manifest fallback should not quietly become the source of truth again.
+- Markdown/manifest parsing should not be reintroduced into runtime
+  list/find/delete/copy/export.
 - Temporary vault files and debug files can leak storage and private data if not
   cleaned up.
 - Telegram handlers can become too stateful unless business logic moves into
   services/repositories.
-- Correction rules can corrupt data if they become global replacements instead
-  of scoped mappings.
+- Correction rules must stay owner-scoped unless admin-approved global rule
+  management is explicitly designed.
 - SQLite migrations must stay atomic and idempotent.
 
 ## Parking lot
@@ -66,4 +67,5 @@
 - Admin dashboard or PWA controls for correction rules.
 - SQLite FTS5 for item and merchant search.
 - Audit log for access decisions, deletions, exports, and web logins.
-- Legacy receipt migration from manifest files into SQLite if needed.
+- One-off import from old vault files only if a user explicitly asks for it;
+  default direction is purge without migration.

@@ -1,5 +1,44 @@
 # Task Log
 
+## 2026-05-31
+
+### Remove manifest-backed runtime fallback
+
+**Summary:** Completed the DB-first revision by removing manifest-backed
+runtime list/find/delete/copy/export paths.
+**Files changed:**
+
+- `app/receipts/repository.py`
+- `app/repositories/documents.py`
+- `app/obsidian/writer.py`
+- `app/obsidian/purge.py`
+- `app/telegram/handlers/`
+- `tests/`
+- `README.md`
+- `docs/PROJECT_STATE.md`
+- `docs/DECISIONS.md`
+- `docs/NEXT_STEPS.md`
+- `docs/TASK_LOG.md`
+
+**Details:**
+
+- `ReceiptRepository` is now a DB-only facade over `DocumentRepository`.
+- `app/obsidian/delete.py`, legacy manifest writing, and permanent
+  `OCR_VERIFIED` export paths were removed from runtime behavior.
+- `/export_receipts` archives only DB-tracked Obsidian export files and
+  canonical files under `Canonical/<receipt_id>/`.
+- `/purge_legacy_manifests` provides admin dry-run/apply cleanup for old
+  manifest-declared files without migrating them.
+- Telegram command help now uses `<document_id|receipt_id>` instead of
+  `file.md`, and review text shows the immutable document type.
+- Raw OCR and clean OCR are stored separately.
+
+**Reason:** SQLite `documents` / `document_files` must be the only runtime
+source of truth before adding more web/API/search work.
+**Validation:** `./.venv/bin/python -m pytest -q` passed with 125 tests.
+**Related decisions:** `2026-05-31 - Remove manifest-backed runtime without
+migration`; `2026-05-21 - SQLite as source of truth`.
+
 ## 2026-05-23
 
 ### Add receipt magic deep links after save
@@ -466,6 +505,38 @@ to avoid repeating decisions or breaking architectural invariants.
 **Related decisions:** `2026-05-22 - Persistent project context in docs`.
 
 ## 2026-05-21
+
+### Fix Codex Security findings: scoped corrections, purge containment, callback recheck
+
+**Summary:** Closed the three reportable Codex Security findings from the
+DB-first audit.  
+**Files changed:**
+
+- `app/storage/corrections.py`
+- `app/db/schema.py`
+- `app/db/migrations.py`
+- `app/obsidian/purge.py`
+- `app/telegram/handlers/receipt.py`
+- focused tests and docs
+
+**Details:**
+
+- Made correction rules owner-scoped with `owner_telegram_user_id`; disabled
+  ownerless/global runtime application and stopped legacy `data/corrections.json`
+  auto-import.
+- Hardened legacy manifest purge so symlinked manifest paths are skipped before
+  read/delete planning.
+- Rechecked current access before Telegram review callbacks can edit, cancel, or
+  confirm active sessions.
+
+**Reason:** Address `AI-001/DB-001`, `STOR-001`, and `TG-001` from the Codex
+Security report.  
+**Validation:** `.venv/bin/python -m pytest -q`; security repro spot-checks for
+STOR/TG/correction poisoning.  
+**Follow-ups:** `CFG-001` HTTPS deployment hardening and OCR sizing remain
+separate follow-up items.  
+**Related decisions:** `2026-05-21 - Correction rules as durable owner-scoped
+data`.
 
 ### Move users and access requests to SQLite
 

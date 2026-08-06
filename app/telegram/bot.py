@@ -37,7 +37,7 @@ from app.telegram.handlers.receipts import (
     my_receipts_command,
     receipt_command,
 )
-from app.telegram.handlers.storage import storage_health_command
+from app.telegram.handlers.storage import purge_legacy_manifests_command, storage_health_command
 from app.telegram.handlers.web import web_command
 from app.telegram.logging import configure_logging
 from app.users.quotas import QuotaService
@@ -86,6 +86,7 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("export_receipts", export_receipts_command))
     application.add_handler(CommandHandler("grant_receipt", grant_receipt_command))
     application.add_handler(CommandHandler("storage_health", storage_health_command))
+    application.add_handler(CommandHandler("purge_legacy_manifests", purge_legacy_manifests_command))
     application.add_handler(CommandHandler("web", web_command))
     application.add_handler(CommandHandler("order", order_command))
     application.add_handler(CallbackQueryHandler(handle_callback))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 
+from app.receipts.document_types import document_type_label
 from app.storage.normalization import normalize_receipt_properties
 
 
@@ -55,11 +56,12 @@ def review_payload_json(parsed: dict[str, object]) -> str:
     return json.dumps(build_review_payload(parsed), ensure_ascii=False, indent=2)
 
 
-def render_review_text(parsed: dict[str, object]) -> str:
+def render_review_text(parsed: dict[str, object], *, document_type: str = "receipt") -> str:
     payload = build_review_payload(parsed)
     lines = [
         "Проверьте поля, которые попадут в заметку:",
         "",
+        f"Тип: {document_type_label(document_type)}",
         f"Дата: {payload['date']}",
         f"Время: {payload['time'] or 'не указано'}",
         f"Продавец: {payload['merchant']}",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 INITIAL_SCHEMA_SQL = """
@@ -181,17 +181,18 @@ create table if not exists correction_rules (
     last_used_at text,
     created_at text not null,
     updated_at text not null,
+    owner_telegram_user_id integer not null default 0,
     created_by_telegram_user_id integer
 );
 
 create unique index if not exists idx_correction_rules_unique
-on correction_rules(scope, source, language, document_type, merchant);
+on correction_rules(owner_telegram_user_id, scope, source, language, document_type, merchant);
 
 create index if not exists idx_correction_rules_scope
 on correction_rules(scope);
 
 create index if not exists idx_correction_rules_lookup
-on correction_rules(scope, source, language, document_type, merchant);
+on correction_rules(owner_telegram_user_id, scope, source, language, document_type, merchant);
 
 create table if not exists magic_links (
     id text primary key,

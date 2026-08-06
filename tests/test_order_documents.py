@@ -1,13 +1,13 @@
-import json
 from datetime import datetime
 from pathlib import Path
 
 from app.config import Settings
+from app.db.connection import connect_database
 from app.llm.openai_parser import ParsedReceipt
-from app.obsidian.writer import write_receipt_note
 from app.pipeline import receipt_pipeline
 from app.receipts.document_classifier import classify_document_type
 from app.receipts.document_types import DOCUMENT_TYPE_ORDER, DOCUMENT_TYPE_RECEIPT
+from app.repositories.documents import DocumentRepository
 from app.review.models import ReceiptSession
 from app.storage.corrections import CorrectionStore
 
@@ -42,6 +42,7 @@ def test_parse_for_review_passes_order_document_type(monkeypatch, tmp_path: Path
         settings=_settings(tmp_path),
         correction_store=CorrectionStore(_settings(tmp_path)),
         document_type=DOCUMENT_TYPE_ORDER,
+        owner_telegram_user_id=222,
     )
 
     assert captured == {"ocr_text": "order screenshot OCR", "document_type": DOCUMENT_TYPE_ORDER}
@@ -59,17 +60,19 @@ def test_receipt_session_document_type_persists_and_defaults(tmp_path: Path) -> 
     assert legacy.document_type == DOCUMENT_TYPE_RECEIPT
 
 
-def test_write_order_note_persists_document_type_in_manifest(tmp_path: Path) -> None:
-    artifact = write_receipt_note(
-        _settings(tmp_path),
+def test_order_document_type_persists_in_db_and_obsidian_export(tmp_path: Path) -> None:
+    app_settings = _settings(tmp_path)
+    result = DocumentRepository(app_settings).create_confirmed_from_session(
         _session(tmp_path, document_type=DOCUMENT_TYPE_ORDER),
         _parsed_order(),
     )
-    manifest = json.loads(artifact.manifest_path.read_text(encoding="utf-8"))
-    note_text = artifact.note_path.read_text(encoding="utf-8")
+    with connect_database(app_settings) as connection:
+        document = connection.execute("select document_type from documents where id = ?", (result.record.document_id,)).fetchone()
+    note_text = (app_settings.obsidian_vault / result.record.note_rel).read_text(encoding="utf-8")
 
-    assert manifest["document_type"] == DOCUMENT_TYPE_ORDER
+    assert document["document_type"] == DOCUMENT_TYPE_ORDER
     assert "# Заказ — Delivery App — 5000 AMD" in note_text
+    assert not (app_settings.obsidian_vault / "MANIFEST").exists()
 
 
 def test_classifier_detects_order_screenshot_noise() -> None:

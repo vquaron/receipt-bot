@@ -198,7 +198,7 @@ data/exports/
 data/debug/
 ```
 
-`data/access.json`, `data/users/users.json`, `data/users/access_requests.json` и `data/sessions/*.json` больше не являются runtime-хранилищем и не импортируются автоматически. `data/corrections.json` используется только как legacy one-time import source, если SQLite `correction_rules` ещё пустая. Доступ задаётся через `.env` bootstrap и меняется через SQLite-backed Telegram approval flow. Незавершённые проверки восстанавливаются из SQLite `processing_sessions`; временные изображения и OCR-файлы лежат в `data/tmp/processing/<session_id>/`. После confirm canonical images сохраняются через выбранный image backend (`local` или `s3`), OCR-файлы сохраняются в `data/storage/documents/<document_id>/`, а temp-dir очищается при финализации session.
+`data/access.json`, `data/users/users.json`, `data/users/access_requests.json`, `data/sessions/*.json` и `data/corrections.json` больше не являются runtime-хранилищем и не импортируются автоматически. Доступ задаётся через `.env` bootstrap и меняется через SQLite-backed Telegram approval flow. Незавершённые проверки восстанавливаются из SQLite `processing_sessions`; временные изображения и OCR-файлы лежат в `data/tmp/processing/<session_id>/`. После confirm canonical images сохраняются через выбранный image backend (`local` или `s3`), OCR-файлы сохраняются в `data/storage/documents/<document_id>/`, а temp-dir очищается при финализации session.
 
 Если пользователь не в allowlist, бот не скачивает фото, не вызывает Google Vision, не вызывает OpenAI и не создаёт файлы. Вместо этого создаётся pending-заявка, а всем администраторам приходит сообщение с кнопками `Approve` / `Reject`.
 
@@ -242,7 +242,7 @@ data/storage/documents/<document_id>/source.hy.txt
 Users/<telegram_user_id>/Receipts/YYYY/MM/<file_name>.md
 Users/<telegram_user_id>/Attachments/receipts/YYYY/MM/<file_name>.jpg
 data/debug/openai/<telegram_user_id>/YYYY/MM/<temporary_name>.openai.raw.txt
-data/exports/<telegram_user_id>/receipts_YYYYMMDD_HHMMSS.zip
+data/exports/<telegram_user_id>/receipts_YYYYMMDD_HHMMSS_<id>.zip
 ```
 
 При `STORAGE_IMAGE_BACKEND=s3` `original.jpg` и `stored.jpg` хранятся как
@@ -259,8 +259,12 @@ Retention управляется настройками
 `STORAGE_RETENTION_EXPORT_DAYS`, `STORAGE_RETENTION_DEBUG_DAYS` и
 `STORAGE_RETENTION_TMP_HOURS`.
 
-Новые `MANIFEST/...` файлы не создаются. Старые manifest-файлы остаются
-поддержанным fallback для legacy-чеков.
+`MANIFEST/...`, permanent `OCR/...` и `OCR_VERIFIED/...` больше не являются
+runtime-слоем приложения. Старые manifest-backed файлы можно удалить через
+admin-команду `/purge_legacy_manifests`: по умолчанию она работает в dry-run
+режиме, а `/purge_legacy_manifests --apply` удаляет только файлы, перечисленные
+в валидных manifest, плюс сами manifest-файлы. Orphan-файлы без manifest-связи
+не удаляются.
 
 Каждый пользователь пишет в отдельное пространство внутри vault:
 
@@ -270,9 +274,12 @@ Users/<telegram_user_id>/
 
 Обычный пользователь может читать, экспортировать и удалять только свои чеки. Администратор может управлять доступом и отзывать пользователей.
 
-Scoped-правила замен вроде `WT -> шт` хранятся в SQLite `correction_rules`.
+Персональные scoped-правила замен вроде `WT -> шт` хранятся в SQLite `correction_rules` с `owner_telegram_user_id`. Ownerless/global rules не применяются в runtime.
 
-Пока финальное имя ещё неизвестно, CLEAN OCR и изображение сохраняются под временным именем. После подтверждения русских полей бот переносит их в финальные пути.
+Пока финальное имя ещё неизвестно, OCR и изображение сохраняются во временной
+директории `data/tmp/processing/<session_id>/`. После подтверждения русских
+полей canonical файлы копируются в app storage / object storage, а Obsidian
+получает только readable Markdown export и attachment.
 
 Properties заметки содержат только:
 
@@ -303,7 +310,7 @@ category: "Grocery"
 
 Если пользователь отменяет обработку, Markdown-заметка не создаётся.
 
-При исправлении бот сравнивает исходные поля OpenAI и исправленные поля. Если, например, было `WT`, а пользователь заменил на `шт`, правило сохраняется в SQLite `correction_rules` и будет применяться к следующим чекам.
+При исправлении бот сравнивает исходные поля OpenAI и исправленные поля. Если, например, было `WT`, а пользователь заменил на `шт`, персональное правило сохраняется в SQLite `correction_rules` и будет применяться только к следующим документам этого Telegram user id.
 
 ## 10. Нестандартные чеки и скриншоты заказов
 
@@ -364,39 +371,34 @@ OpenAI должен вернуть строгий JSON:
 
 ## 12. Удаление чека
 
-Чтобы удалить Markdown-заметку вместе с изображением и OCR-файлами, отправьте боту:
+Чтобы удалить DB-документ вместе с записанными файлами, отправьте боту:
 
 ```text
-/delete_receipt <receipt_id или file.md>
+/delete_receipt <document_id|receipt_id>
 ```
 
-Если имя файла уникально, можно указать только его:
-
-```text
-/delete_receipt 2025-11-24_at_torg_1318AMD.md
-```
-
-Для новых DB-first чеков удаление использует SQLite `document_files`: бот
-удаляет canonical local files, удаляет все версии recorded S3 image objects,
-удаляет Obsidian export-файлы и помечает документ как deleted в SQLite. DB row
-остаётся для аудита и скрывается из списков.
-
-Для старых чеков остаётся fallback через manifest JSON или wikilinks из Markdown.
-В обоих режимах проверяется scope: обычный пользователь не может удалить чужой
-чек, а записанные пути не могут выходить за пределы настроенных storage roots.
+Удаление использует только SQLite `documents` / `document_files`: бот удаляет
+canonical local files, удаляет все версии recorded S3 image objects, удаляет
+DB-tracked Obsidian export-файлы и помечает документ как deleted в SQLite. DB
+row остаётся для аудита и скрывается из списков. Обычный пользователь не может
+удалить чужой документ, а записанные пути не могут выходить за пределы
+настроенных storage roots.
 
 Команды для получения своих чеков:
 
 - `/my_receipts` — показать последние сохранённые чеки;
-- `/receipt <receipt_id>` — получить краткую карточку, изображение и Markdown-файл чека;
+- `/receipt <document_id|receipt_id>` — получить краткую карточку, изображение и Markdown-файл чека;
 - `/order` — обработать следующее фото как скриншот заказа;
 - `/export_receipts` — получить ZIP-архив своих чеков: readable Obsidian files
-  плюс canonical DB-файлы под `Canonical/<receipt_id>/`.
-- `/grant_receipt <user_id> <receipt_id>` — только для админа, deep-copy
-  DB-first чека пользователю или legacy-copy старого manifest-backed чека.
+  из SQLite `document_files` плюс canonical DB-файлы под
+  `Canonical/<receipt_id>/`. Untracked vault-файлы в архив не попадают.
+- `/grant_receipt <user_id> <document_id|receipt_id>` — только для админа,
+  deep-copy DB-документа пользователю.
 - `/storage_health` — только для админа, read-only отчёт по `documents` /
   `document_files`, missing files, checksum drift, unsafe refs и orphan app
   files.
+- `/purge_legacy_manifests [--apply]` — только для админа, dry-run/apply
+  cleanup старых manifest-backed файлов без миграции.
 
 Web MVP запускается отдельным процессом:
 
@@ -407,8 +409,7 @@ python web.py
 Telegram `/web` создаёт одноразовую ссылку с TTL
 `WEB_MAGIC_LINK_TTL_MINUTES`. После входа web-сессия хранится в HttpOnly cookie
 `WEB_SESSION_COOKIE_NAME` до `WEB_SESSION_TTL_DAYS`. Web MVP read-only и
-показывает только DB-first документы текущего пользователя; legacy manifest
-чеки остаются доступны через Telegram/Obsidian fallback.
+показывает только DB-first документы текущего пользователя.
 
 ## 13. Production и Docker
 
@@ -453,7 +454,7 @@ WEB_PORT=8081
 python -m pytest -q
 ```
 
-Тесты покрывают path safety, JSON parsing, Markdown rendering, access control, SQLite migrations, scoped correction rules, manifest deletion, user isolation, DB-first documents/items/files/delete/copy/export, per-user receipt index/export, processing sessions, user quotas, magic-link auth и read-only Web MVP API.
+Тесты покрывают path safety, JSON parsing, Markdown rendering, access control, SQLite migrations, scoped correction rules, legacy manifest purge, user isolation, DB-first documents/items/files/delete/copy/export, per-user receipt index/export, processing sessions, user quotas, magic-link auth и read-only Web MVP API.
 
 ## 15. Ограничения MVP
 

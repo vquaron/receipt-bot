@@ -137,7 +137,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     else:
         await update.message.reply_text("Фото получено. Распознаю текст изображения...")
     try:
-        _raw_ocr, clean_ocr = await asyncio.to_thread(run_ocr, image_path)
+        raw_ocr, clean_ocr = await asyncio.to_thread(run_ocr, image_path)
     except GoogleVisionCredentialsError:
         LOGGER.exception("Google Vision ADC credentials are missing.")
         delete_session(user_id, context, final_state=SessionState.FAILED)
@@ -193,7 +193,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     try:
         clean_ocr_path.write_text(clean_ocr, encoding="utf-8")
-        source_ocr_path.write_text(clean_ocr, encoding="utf-8")
+        source_ocr_path.write_text(raw_ocr, encoding="utf-8")
     except OSError:
         LOGGER.exception("Failed to write OCR files for user_id=%s", user_id)
         delete_session(user_id, context, final_state=SessionState.FAILED)
@@ -225,7 +225,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     session = SESSIONS.get(update.effective_user.id)
     if session is None:
-        await query.message.reply_text("Нет активной обработки чека.")
+        await query.message.reply_text("Нет активной обработки документа.")
+        return
+    if not await ensure_access(update, context):
         return
     if query.data == "review_cancel":
         delete_session(session.user_id, context, final_state=SessionState.CANCELLED)
@@ -277,6 +279,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         learned_count = corrections(context).learn(
             session.parsed_receipt,
             corrected,
+            owner_telegram_user_id=session.user_id,
             created_by_telegram_user_id=session.user_id,
         )
         session.parsed_receipt = corrected
@@ -317,6 +320,7 @@ async def process_openai_for_review(session: ReceiptSession, reply_target, conte
             settings=app_settings,
             correction_store=corrections(context),
             document_type=session.document_type,
+            owner_telegram_user_id=session.user_id,
         )
     except OpenAIInvalidJSONError as exc:
         LOGGER.exception("OpenAI returned invalid JSON.")
@@ -343,7 +347,7 @@ async def process_openai_for_review(session: ReceiptSession, reply_target, conte
         delete_session(session.user_id, context, final_state=SessionState.FAILED)
         await reply_target.reply_text("Не удалось сохранить сессию проверки.")
         return
-    await send_text_chunks(reply_target, render_review_text(parsed.data), reply_markup=review_keyboard())
+    await send_text_chunks(reply_target, render_review_text(parsed.data, document_type=session.document_type), reply_markup=review_keyboard())
 
 
 async def create_note_from_review(session: ReceiptSession, reply_target, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -53,10 +53,31 @@ fragile.
 **Alternatives considered:** Keep parsing Markdown and manifests for app state;
 drop Obsidian entirely. Parsing Markdown is brittle; dropping Obsidian would
 remove a useful user-facing archive.  
-**Impact:** New document features should write/read SQLite first and generate
-Obsidian notes as export artifacts. Delete should become DB-first with manifest
-fallback for legacy receipts.  
+**Impact:** Document features write/read SQLite first and generate Obsidian
+notes as export artifacts. Runtime list/find/delete/copy/export must not parse
+Markdown or manifests.
 **Review trigger:** Revisit if Obsidian export is no longer needed by users.
+
+### 2026-05-31 - Remove manifest-backed runtime without migration
+
+**Status:** active
+**Decision:** Old manifest-backed receipts are no longer supported runtime data
+and may be purged without migration to SQLite.
+**Context:** The repository had DB-first documents while `ReceiptRepository`
+still parsed old manifests for list/find/delete/copy/export. This preserved the
+old source-of-truth ambiguity and made export include untracked vault files.
+**Reason:** The project needs one durable runtime source of truth before adding
+search, write APIs, and security review. Keeping manifest fallback keeps old
+storage rules alive in every new feature.
+**Alternatives considered:** Migrate manifest receipts into SQLite; keep
+manifest fallback indefinitely. Migration is not needed for the current archive;
+fallback would keep legacy behavior in the critical path.
+**Impact:** `ReceiptRepository` is DB-only. `/export_receipts` includes only
+DB-tracked Obsidian export files and canonical files. `/purge_legacy_manifests`
+can dry-run or apply deletion of files listed by valid old manifests, plus the
+manifest files themselves.
+**Review trigger:** Revisit only if a user explicitly needs a one-off import of
+old vault files into SQLite.
 
 ### 2026-05-21 - Store processing stages
 
@@ -213,20 +234,19 @@ uses metadata/head checks only and does not download objects.
 ### 2026-05-22 - OCR_VERIFIED is legacy-only
 
 **Status:** active
-**Decision:** `OCR_VERIFIED` remains supported for legacy Obsidian/manifest
-receipts, but new DB-first documents do not create permanent `OCR_VERIFIED`
-files.
+**Decision:** New DB-first documents do not create permanent `OCR_VERIFIED`
+files. Any existing `OCR_VERIFIED` files are old manifest-backed artifacts and
+may be purged with the manifest cleanup flow.
 **Context:** Manual review now happens on Russian note/export fields, while new
 DB-first documents store canonical OCR artifacts in app storage and record them
 in SQLite `document_files`.
 **Reason:** A permanent `OCR_VERIFIED` copy would imply Armenian OCR was manually
-verified, which is no longer the product workflow. Keeping legacy fallback avoids
-breaking old receipts.
+verified, which is no longer the product workflow. Canonical OCR belongs in app
+storage and SQLite file metadata.
 **Alternatives considered:** Continue creating `OCR_VERIFIED` for every new
-receipt; remove all legacy support; store only OCR hashes. Continuing creates
-misleading duplicates; removing legacy support would break old archives; hashes
+receipt; store only OCR hashes. Continuing creates misleading duplicates; hashes
 alone are not enough for reprocessing/debug.
-**Impact:** Legacy delete/copy/export can still see `OCR_VERIFIED`; DB-first
+**Impact:** Runtime delete/copy/export no longer reads `OCR_VERIFIED`. DB-first
 export uses canonical OCR file records and does not expose OCR in Markdown by
 default.
 **Review trigger:** Revisit if future review UX starts explicitly verifying raw
@@ -253,11 +273,10 @@ implemented.
 
 **Status:** active
 **Decision:** The first Web MVP uses magic-link auth and a read-only FastAPI/PWA
-surface over DB-first documents only. Legacy manifest receipts stay available
-through Telegram/Obsidian fallback, not through the first web API.
+surface over DB-first documents only.
 **Context:** SQLite now owns users, quotas, processing sessions, documents,
 files, and correction rules. Users need a mobile-friendly read surface, but
-write actions and legacy migration would make the first web PR too broad.
+write actions would make the first web PR too broad.
 **Reason:** A DB-only read surface preserves the SQLite source-of-truth
 direction and keeps auth/session/storage paths small enough to review.
 **Alternatives considered:** API-only without PWA; include legacy manifests;
@@ -267,14 +286,13 @@ actions need more audit/security work.
 **Impact:** `/web` creates one-time magic links; web sessions use HttpOnly
 cookies; the PWA supports list/detail/items/images for current-user DB
 documents only.
-**Review trigger:** Revisit when adding search, legacy migration, or web write
-actions.
+**Review trigger:** Revisit when adding search or web write actions.
 
-### 2026-05-21 - Correction rules as durable scoped data
+### 2026-05-21 - Correction rules as durable owner-scoped data
 
 **Status:** active  
-**Decision:** Correction rules are durable, scoped data rather than prompt text
-or unsafe global replacement.  
+**Decision:** Correction rules are durable, owner-scoped data rather than prompt
+text or unsafe global replacement.  
 **Context:** Manual Russian field corrections should improve later receipts, for
 example normalizing merchant names, units, and product names.  
 **Reason:** Rules need to be inspectable, reusable, counted, constrained by
@@ -283,12 +301,13 @@ string replacement can corrupt unrelated fields.
 **Alternatives considered:** Put all corrections into OpenAI prompts; perform
 global string replacement; do not learn corrections. These approaches are less
 safe and less debuggable.  
-**Impact:** Runtime rules live in SQLite `correction_rules` with scoped
-uniqueness. Legacy `data/corrections.json` is only a one-time import source when
-the SQLite table is empty. Applying a rule updates usage counters; learning a
-rule writes the Telegram user id when available.
+**Impact:** Runtime rules live in SQLite `correction_rules` with
+`owner_telegram_user_id` in the uniqueness and lookup scope. Ownerless/global
+rules are disabled at runtime, and legacy `data/corrections.json` is not
+imported automatically. Applying a rule updates usage counters; learning a rule
+writes the owner Telegram user id and keeps creator id as audit metadata.
 **Review trigger:** Revisit when correction rules need merchant-specific,
-language-specific, or user-specific behavior.
+language-specific, or admin-approved global behavior.
 
 ### 2026-05-21 - Access requests in SQLite
 
@@ -384,7 +403,7 @@ date filtering.
 
 **Status:** active
 **Decision:** `documents.id` is the canonical document identity; `file_stem` is a
-human-readable export/display identity used for Markdown, manifests, and file
+human-readable export/display identity used for Markdown export and file
 paths.
 **Context:** Receipt filenames need readable merchant/date/amount stems, but
 those values can collide or change after review.

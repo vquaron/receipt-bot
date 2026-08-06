@@ -26,7 +26,7 @@ from app.storage.normalization import (
 from app.storage.images import create_stored_image
 from app.storage.object_store import ObjectStorageError, StoredObject, image_storage, storage_key
 from app.storage.paths import ensure_parent, safe_vault_path
-from app.users.paths import user_dated_relpath
+from app.users.paths import user_dated_relpath, user_root_rel
 
 
 DOCUMENT_STATUS_STORING_FILES = "storing_files"
@@ -403,12 +403,6 @@ class DocumentRepository:
         remote_records = [file for file in record.file_records if file.storage_backend == STORAGE_BACKEND_S3]
         deleted: list[Path] = []
         missing: list[Path] = []
-        for path in targets:
-            if path.exists():
-                path.unlink()
-                deleted.append(path)
-            else:
-                missing.append(path)
         if remote_records:
             store = image_storage(self.settings)
             for file in remote_records:
@@ -418,6 +412,12 @@ class DocumentRepository:
                 except ObjectStorageError as exc:
                     raise DocumentStorageError(str(exc)) from exc
                 deleted.append(Path(file.storage_key))
+        for path in targets:
+            if path.exists():
+                path.unlink()
+                deleted.append(path)
+            else:
+                missing.append(path)
         self.mark_deleted(record.document_id)
         return DocumentDeleteResult(record=record, deleted=deleted, missing=missing)
 
@@ -570,9 +570,22 @@ class DocumentRepository:
 
     def archive_files_for_user(self, user_id: int, *, materialize_root: Path | None = None) -> list[DocumentArchiveFile]:
         result: list[DocumentArchiveFile] = []
+        user_root = user_root_rel(self.settings, user_id)
         for record in self.list_user_documents(user_id):
             for file in record.file_records:
-                if not file.is_canonical:
+                if file.is_canonical:
+                    archive_name = f"Canonical/{record.receipt_id}/{file.path.name}"
+                elif file.storage_backend == STORAGE_BACKEND_OBSIDIAN and file.kind in {
+                    FILE_KIND_OBSIDIAN_NOTE,
+                    FILE_KIND_OBSIDIAN_ATTACHMENT,
+                }:
+                    try:
+                        archive_name = file.path.relative_to(user_root).as_posix()
+                    except ValueError as exc:
+                        raise DocumentStorageError(
+                            f"Refusing to export Obsidian file outside user root: {file.path.as_posix()}"
+                        ) from exc
+                else:
                     continue
                 if file.storage_backend == STORAGE_BACKEND_S3:
                     if materialize_root is None:
@@ -587,7 +600,7 @@ class DocumentRepository:
                 result.append(
                     DocumentArchiveFile(
                         path=path,
-                        archive_name=f"Canonical/{record.receipt_id}/{file.path.name}",
+                        archive_name=archive_name,
                     )
                 )
         return result
@@ -978,7 +991,6 @@ def _files_by_document(
             ReceiptFileRecord(
                 kind=str(row["kind"]),
                 path=Path(str(row["path"])),
-                storage=_legacy_storage_alias(backend),
                 storage_backend=backend,
                 storage_key=storage_key_value,
                 bucket=str(row["bucket"] or ""),
@@ -998,7 +1010,6 @@ def _record_from_document_row(row: sqlite3.Row, files: tuple[ReceiptFileRecord, 
         receipt_id=str(row["file_stem"] or row["id"]),
         owner_user_id=int(row["owner_telegram_user_id"]),
         note_rel=note_file.path if note_file is not None else Path(),
-        manifest_rel=Path(),
         date=str(row["date"] or ""),
         merchant=str(row["merchant"] or ""),
         amount=str(row["amount"] or ""),
@@ -1007,7 +1018,6 @@ def _record_from_document_row(row: sqlite3.Row, files: tuple[ReceiptFileRecord, 
         files=tuple(file.path for file in files if file.storage_backend == STORAGE_BACKEND_OBSIDIAN),
         document_type=normalize_document_type(row["document_type"]),
         document_id=str(row["id"]),
-        source="db",
         file_records=files,
     )
 
@@ -1064,6 +1074,8 @@ def _relative_to(root: Path, path: Path) -> Path:
 
 
 def _safe_storage_path(root: Path, rel_path: Path) -> Path:
+    if rel_path.is_absolute() or ".." in rel_path.parts:
+        raise ValueError("Path escapes storage root.")
     root = root.expanduser().resolve()
     candidate = (root / rel_path).resolve()
     if not candidate.is_relative_to(root):
@@ -1075,14 +1087,6 @@ def _storage_backend_for_kind(kind: str) -> str:
     if kind in {FILE_KIND_ORIGINAL_IMAGE, FILE_KIND_STORED_IMAGE, FILE_KIND_CLEAN_OCR, FILE_KIND_SOURCE_OCR}:
         return STORAGE_BACKEND_LOCAL
     return STORAGE_BACKEND_OBSIDIAN
-
-
-def _legacy_storage_alias(storage_backend: str) -> str:
-    if storage_backend == STORAGE_BACKEND_OBSIDIAN:
-        return "vault"
-    if storage_backend == STORAGE_BACKEND_S3:
-        return "s3"
-    return "app"
 
 
 def _validate_object_key(key: str) -> None:

@@ -54,6 +54,20 @@ MIGRATIONS: tuple[Migration, ...] = (
         on document_files(storage_backend, bucket, storage_key);
         """,
     ),
+    Migration(
+        4,
+        "owner_scoped_correction_rules",
+        """
+        drop index if exists idx_correction_rules_unique;
+        drop index if exists idx_correction_rules_lookup;
+
+        create unique index if not exists idx_correction_rules_unique
+        on correction_rules(owner_telegram_user_id, scope, source, language, document_type, merchant);
+
+        create index if not exists idx_correction_rules_lookup
+        on correction_rules(owner_telegram_user_id, scope, source, language, document_type, merchant);
+        """,
+    ),
 )
 
 
@@ -70,6 +84,8 @@ def apply_migrations(connection: sqlite3.Connection) -> None:
             continue
         applied_at = datetime.now().isoformat()
         try:
+            if migration.version == 4:
+                _ensure_correction_rules_owner_column(connection)
             connection.executescript(
                 """
                 begin immediate;
@@ -106,3 +122,14 @@ def _ensure_migrations_table(connection: sqlite3.Connection) -> None:
 def _applied_versions(connection: sqlite3.Connection) -> set[int]:
     rows = connection.execute("select version from schema_migrations").fetchall()
     return {int(row[0]) for row in rows}
+
+
+def _ensure_correction_rules_owner_column(connection: sqlite3.Connection) -> None:
+    rows = connection.execute("pragma table_info(correction_rules)").fetchall()
+    columns = {str(row[1]) for row in rows}
+    if "owner_telegram_user_id" in columns:
+        return
+    connection.execute(
+        "alter table correction_rules add column owner_telegram_user_id integer not null default 0"
+    )
+    connection.commit()
